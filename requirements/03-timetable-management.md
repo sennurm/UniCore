@@ -15,6 +15,8 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 - Draft vs published states with an HoD → Timetable Cell approval flow before publish.
 - Versioned republish for mid-term edits, with change notifications to affected faculty/students; past Sessions unaffected.
 - Substitute Faculty Member assignment per Period occurrence — temporary, audited, conferring session-open rights per the ATT doc.
+- **Rebalancing suggestions:** when a Faculty Member is on approved leave or absent same-day, ranked substitute candidates per affected Period occurrence, confirmed by the HoD — nothing auto-assigns.
+- **Class swaps:** two Faculty Members exchange specific Period occurrences by mutual consent (both-ways clash-checked); HoD notified, not a gate; occurrence-level only.
 - Venue-capacity vs enrolled-headcount warnings (soft) alongside hard clash blocks.
 - Elective-group enrollment managed by Department admin staff with capacity limits.
 
@@ -51,6 +53,8 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 | Approve/reject draft | HoD for their Department's portion; publish requires all covered HoDs approved | API (workflow engine) |
 | Publish / versioned republish | Timetable Cell (own campus), only from fully approved draft | API + service layer |
 | Assign substitute for a Period occurrence | HoD (own Department) or Timetable Cell (own campus) | API |
+| Confirm a rebalancing suggestion | HoD (own Department); Timetable Cell as fallback | API |
+| Propose / accept / cancel a class swap | The two Faculty Members assigned to the occurrences being exchanged (own Periods only); HoD(s) auto-notified | API + service layer (both-ways clash check) |
 | Create elective groups, set capacity | Department admin staff (own Department) | API |
 | Assign/remove student in elective group | Department admin staff (own Department), within capacity | API |
 | View published timetable | Any authenticated user within org scope (students/faculty: own; HoD/exec: their units) | API |
@@ -66,7 +70,9 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 6. **Republish is versioned:** version N+1 supersedes N from its effective date; Sessions already delivered (or in progress) under N are immutable; change notifications go to every affected Faculty Member and student listing exactly which Periods changed.
 7. Venue capacity < enrolled headcount raises a **warning** requiring Timetable Cell explicit acknowledgment (recorded) — not a block, because real-world constraints (renovations, temporary rooms) need overrides; the acknowledgment is audited.
 8. Substitute assignment: per Period occurrence (a date) or a date range; the original assignment is retained; the substitute gains session-open rights for exactly those occurrences (ATT doc); substitution never edits the published timetable version.
-9. Attendance integration: the ATT module resolves "who may open this Session" strictly from the current published version + active substitutions; drafts have no runtime effect.
+9. Attendance integration: the ATT module resolves "who may open this Session" strictly from the current published version + active substitutions + committed swaps; drafts have no runtime effect.
+9a. **Rebalancing suggestions:** triggered by (a) LVE approval of a Faculty Member's leave (proactive — before the leave starts) and (b) same-day absence (an ATT never-opened flag, or the HoD marking the member absent). For each affected Period occurrence the system proposes ranked candidates: clash-free in that slot (hard filter), then ranked by same-subject familiarity (teaches the same subject this term), same Department, and lowest incremental load. The HoD confirms a candidate — which creates a standard substitution per rule 8 — or rejects all and acts manually (own substitution or Session cancellation per ATT). **Nothing is ever auto-assigned.** Same-day triggers mark the suggestion urgent.
+9b. **Class swaps:** Faculty Member A proposes exchanging specific Period occurrences with Faculty Member B (each must be the assigned/substitute/swapped-in teacher of the occurrences offered). Both directions are clash-checked at proposal AND at acceptance (state may have changed between). On B's acceptance the swap **commits immediately** — mutual occurrence-level reassignment, session-open rights follow (ATT), and the HoD(s) of both members are notified (informed, not a gate) with the swap details. Audited end to end. Either party may cancel a committed swap before the first swapped occurrence (counterpart + HoDs notified); after that, changes go through substitution. A swapped-in occurrence cannot be re-swapped — one hop only; the HoD can still substitute over it.
 10. **Subject allocation is term-bound.** A Faculty Member's allocation to a subject in a Section exists only inside that term's published timetable and confers no rights beyond the term. When PRM ratification closes a Section's cohort (see 06-student-promotion.md), the Section's timetable for that term is **archived**: no new Sessions can be opened from it, substitutions on it are rejected, and it remains readable as historical record only. The new term's teaching rights exist only once the new term's timetable is published — nothing carries over automatically, even for the same Faculty Member teaching the same subject. A PRM rollback (within its window) un-archives the affected Section's timetable together with the AUTH grant restore.
 
 ### Audit
@@ -120,7 +126,9 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 - TTM-FR-12: Venue-capacity warnings with mandatory recorded acknowledgment to proceed.
 - TTM-FR-13: Personal timetable views: student (Section + batch + elective merged), Faculty Member (own load incl. substitutions), HoD/exec (scope dashboards).
 - TTM-FR-14: Constraint data (faculty availability notes, venue attributes, group structures) stored as structured first-class data so a future auto-generation solver can consume it (non-goal to build the solver).
-- TTM-FR-15: Term-bound archival: on the PRM term-closure event for a Section's cohort, archive that Section's timetable — reject Session opens (ATT) and new substitutions against it, keep read access for history/audit; un-archive on PRM rollback within the rollback window.
+- TTM-FR-15: Term-bound archival: on the PRM term-closure event for a Section's cohort, archive that Section's timetable — reject Session opens (ATT) and new substitutions/swaps against it, keep read access for history/audit; un-archive on PRM rollback within the rollback window.
+- TTM-FR-16: Rebalancing suggestions per §4 rule 9a: triggered by LVE leave approval and same-day absence; ranked clash-free candidates (subject familiarity, Department, lowest load); HoD confirmation creates a substitution; urgent flag for same-day; suggestion, confirmation, and rejection all audited.
+- TTM-FR-17: Class swaps per §4 rule 9b: propose → both-ways clash check → accept (re-check) → immediate commit; occurrence-level only; one-hop (no re-swap); HoD notification; cancellation before first swapped occurrence; session-open rights and ATT/SYL attribution follow the swap.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -132,6 +140,11 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 | HoD approval granted, then that HoD's portion is edited | That HoD's approval auto-invalidates (portion-scoped approval hash); other HoDs' approvals stand. Re-approval required only where content changed. |
 | Republish while a Session under version N is in progress | The in-progress Session completes under N; N+1 applies from its effective date, which cannot be earlier than "tomorrow" (next calendar day) — same-day republish is rejected to avoid mid-day ambiguity. Same-day emergencies use substitution or Session cancellation (ATT doc), not republish. |
 | Substitute needed but every eligible Faculty Member clashes | System offers no override — a clash block is absolute. HoD either reschedules via republish or cancels the occurrence (ATT doc). Recorded decision: integrity of clash rules outranks convenience. |
+| Rebalancing suggestion list is empty (no clash-free candidate) | The HoD is told explicitly ("no eligible substitute") with the option to cancel the occurrence (ATT) or reschedule via republish; the empty result is recorded — silence is never the outcome. |
+| Confirmed substitute then goes on leave themselves | Their leave approval re-triggers rebalancing for the occurrences they had picked up — the suggestion flow is re-entrant. |
+| Swap accepted but a republish moves one of the swapped occurrences | The swap is auto-voided for the affected occurrences only; both parties and HoD(s) notified; unaffected occurrences of the swap stand. |
+| Both parties accept a swap simultaneously with a conflicting change (e.g., substitution landing on the same occurrence) | Acceptance re-runs the clash check transactionally; the first commit wins, the second actor gets a stale-state error naming the conflict. |
+| Cross-Department swap (A and B report to different HoDs) | Allowed — both HoDs are notified; each sees the swap in their Department view. |
 | Faculty Member leaves service mid-term | Deactivation (AUTH) triggers the orphan check: all their future Periods appear in the Timetable Cell conflicts queue; substitutes cover the gap until a republish reassigns permanently. Past Sessions retain the departed member as historical fact. |
 | Venue becomes unavailable mid-term (flooding, renovation) | Venue marked inactive from a date by System Admin; all future Periods there enter the conflicts queue; republish relocates them. Capacity warnings recalculated for the new venues. |
 | Period grid change mid-term (School shifts timings) | Allowed only with a new grid version effective a future date + forced republish of every affected Section; absolute-time clash checks (TTM-FR-04) handle the transition week correctly. |
@@ -216,5 +229,13 @@ flowchart TD
 | TC-TTM-018 | Clash check performance | NFR | P2 | Full campus term loaded (~500 Sections) | Save one entry | Check completes < 2 s (p95) | §9 |
 | TC-TTM-019 | Archived timetable rejects Session open and substitution | Access | P0 | Section cohort ratified in PRM (term-closure event received) | 1. Assigned Faculty Member attempts Session open 2. HoD attempts substitution on the archived timetable | Both rejected naming archival; timetable still readable | TTM-FR-15, §4 rule 10 |
 | TC-TTM-020 | Rollback un-archives Section timetable | Happy | P1 | Archived timetable; PRM rollback approved in window | Rollback commits; Faculty Member opens a Session | Timetable active again; Session opens; both transitions audited | TTM-FR-15 |
+| TC-TTM-021 | Leave approval triggers ranked rebalancing suggestions | Happy | P0 | Faculty leave approved (LVE) covering 4 Periods; eligible candidates exist | Open HoD suggestion queue | 4 suggestion sets, candidates clash-free, ranked (subject, Department, load); HoD confirms → substitutions created and audited | TTM-FR-16, §4 rule 9a |
+| TC-TTM-022 | Same-day absence produces urgent suggestion | Happy | P0 | Period flagged never-opened (ATT) | Inspect HoD queue | Urgent-flagged suggestion for the occurrence; confirmation creates substitution | TTM-FR-16 |
+| TC-TTM-023 | Empty candidate list surfaces explicitly | Negative | P1 | All Department faculty clash in the slot | Trigger rebalancing | "No eligible substitute" shown with cancel/reschedule options; empty result recorded | §8 |
+| TC-TTM-024 | Class swap: propose, accept, teach, cancel path | Happy | P0 | A and B assigned clash-free swappable occurrences | A proposes; B accepts; B opens A's Session on swap date; A cancels a future occurrence pair | Swap commits on acceptance; HoDs notified; session-open rights follow; cancellation before first occurrence reverts with notifications; all audited | TTM-FR-17, §4 rule 9b |
+| TC-TTM-025 | Swap clash re-check at acceptance | Concurrency | P0 | Clash created between proposal and acceptance (substitution landed) | B accepts | Acceptance rejected with stale-state error naming the conflict; no partial swap | TTM-FR-17, §8 |
+| TC-TTM-026 | Swapped-in occurrence cannot be re-swapped | Negative | P1 | Committed swap gives B occurrence X | B proposes swapping X onward to C | Rejected: one-hop rule; HoD substitution over X still possible | §4 rule 9b |
+
+Coverage addition: rebalancing triggers/ranking/empty-list (TC-021/022/023) and the swap lifecycle incl. concurrency and one-hop (TC-024/025/026) map to TTM-FR-16/17.
 
 Coverage: every §6 acceptance criterion, the §4 authorization matrix (TC-012/015 plus scoped-authoring checks folded into TC-001), UGC traceability (TC-017), term-bound archival (TC-019/020), and all §8 decisions map to at least one test except venue-deactivation and faculty-departure conflict-queue flows, which are covered in the integration test phase.

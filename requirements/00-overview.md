@@ -38,7 +38,9 @@ University
 
 ## 4. User groups
 
-Students · Faculty Members · HoDs · Admin/office staff · Executives (VC, Pro-VC, Registrar, campus Principals/Directors, Deans) · Non-teaching support (Exam Cell, Timetable Cell, lab assistants, etc.).
+Students · Faculty Members · HoDs · Admin/office staff · Executives (VC, Pro-VC, Registrar, campus Principals/Directors, Deans) · Non-teaching support (Exam Cell, Timetable Cell, lab assistants, etc.) · **Pro-Chancellor and Chancellor** (top of the reporting chain — minimal-capability accounts, introduced for leave approvals of VC/Registrar).
+
+**Reporting chain** (AUTH-configured, used by leave routing and task escalation): Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor; Registrar → Pro-Chancellor.
 
 **Deliberately excluded:** parents/guardians and external examiners have no system access.
 
@@ -55,6 +57,7 @@ Students · Faculty Members · HoDs · Admin/office staff · Executives (VC, Pro
 | 7 | Syllabus Coverage Tracking | SYL | [07-syllabus-coverage.md](07-syllabus-coverage.md) |
 | 8 | Question Paper Generation | QPG | [08-question-paper-generation.md](08-question-paper-generation.md) |
 | 9 | Executive Email Client with AI Agents | EML | [09-executive-email-ai.md](09-executive-email-ai.md) |
+| 10 | Leave Management | LVE | [10-leave-management.md](10-leave-management.md) |
 
 ## 6. Cross-cutting locked decisions
 

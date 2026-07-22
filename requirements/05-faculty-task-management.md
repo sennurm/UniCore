@@ -178,7 +178,7 @@ Every create, edit, reassignment, delegation approval, decline, override, cancel
 ## 10. Assumptions
 
 - The role hierarchy (Principal/Dean > HoD > Faculty Member) and org-unit scoping are resolvable from AUTH role grants; TSK performs no hierarchy bookkeeping of its own.
-- Leave status is available at least as a manual flag (a full leave-management integration is not assumed in MVP).
+- Leave status comes from the Leave module: approved leave sets the on-leave flag for the leave dates (LVE-FR-12, see 10-leave-management.md), consumed here for reassignment flagging and rotation-pool skips.
 - Email delivery infrastructure exists for reminders (shared with AUTH OTP email fallback).
 - Exam Cell task-assignment authority is granted as a scoped role, not hardcoded.
 - ~2,000 staff, tens of tasks per person per term — well within the NFR sizing above.

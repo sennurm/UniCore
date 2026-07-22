@@ -35,7 +35,7 @@ Attendance in Tasq is captured per **Session** — one delivered instance of a *
 | School Admin (config role) | Configure grace window, QR rotation interval within 15–30 s, escalation and percentage thresholds for their School |
 | System | Computes percentages, flags never-opened Sessions, exposes read API to PRM |
 
-**Denied:** students see only their own records — never classmates'. Faculty Members not assigned to a Period (and not official substitutes) cannot open its Session. Nobody, including Super Admin, can edit locked attendance except the Class In-charge via the correction flow.
+**Denied:** students see only their own records — never classmates'. Faculty Members not assigned to a Period (and not official substitutes or committed swap counterparts per TTM-FR-17) cannot open its Session. Nobody, including Super Admin, can edit locked attendance except the Class In-charge via the correction flow.
 
 ## 4. Authorization & Business Rules
 
@@ -124,11 +124,12 @@ Every Session open/close, pending-scan resolution, manual mark, correction, and 
 - ATT-FR-09: On close, all roster members resolve to `present`/`late`/`absent`; records lock; late counts toward presence unless the School configures otherwise.
 - ATT-FR-10: Roster resolution per timetable shape: plain Section → Section roster; combined class → union of all constituent Sections' rosters under one Session; lab Period → the scheduled batch only; elective Period → the elective group (cross-Section), all sourced from TTM.
 - ATT-FR-11: Post-lock corrections by the Section's Class In-charge only, with mandatory reason and before/after audit; correction window ends at the PRM attendance freeze.
-- ATT-FR-12: Never-opened Period detection: after Period end + grace, flag to HoD; attendance state `not-captured`; excluded from percentage numerator and denominator until resolved (retro-capture by Class In-charge correction flow or HoD-acknowledged write-off).
+- ATT-FR-12: Never-opened Period detection: after Period end + grace, flag to HoD; attendance state `not-captured`; excluded from percentage numerator and denominator until resolved (retro-capture by Class In-charge correction flow or HoD-acknowledged write-off). The flag also fires the urgent TTM rebalancing suggestion flow (TTM-FR-16) so remaining same-day Periods of the absent Faculty Member get covered.
 - ATT-FR-13: Percentage computation per student: per-subject and aggregate, over captured Sessions only; recomputed on every capture/correction; exposed via read API to PRM with the School-configured threshold (default 75%).
 - ATT-FR-14: Student dispute flow on own records → Class In-charge accepts (triggers correction flow) or rejects with reason; both audited and visible to the student; unresolved disputes escalate to the AUTH grievance mechanism.
 - ATT-FR-15: School-level configuration: grace window, QR rotation interval (15–30 s), Session-open window, late-counts-as-present toggle, attendance threshold; all changes audited.
 - ATT-FR-16: Faculty live view during scanning: running scanned count and pending count (no student-by-student proximity detail beyond status).
+- ATT-FR-17: Approved-leave marking (LVE integration): when a student's approved leave of a `counts-as-present` type covers a Session (including retro approvals), the system marks the student per the School's policy automatically, audited with the leave reference — outside the Class In-charge correction flow and not counted against it; `absent` and `condonation-evidence` leave types never alter ATT records (see 10-leave-management.md).
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
