@@ -54,7 +54,7 @@ QPG turns per-subject **question banks** maintained by Faculty Members into seal
 
 ### Business rules
 
-0. **Authoring basis (locked 24-07-2026):** a Faculty Member may author for a subject when EITHER (a) they teach it in the current term's published timetable (TTM), or (b) they hold an active `subject-author` grant — an HoD-issued, Department-scoped grant from the AUTH role registry, optionally time-bound — covering between-term windows and supplementary-exam top-ups. Bank content itself is term-independent; only the authoring right is checked at write time.
+0. **Authoring basis (locked 24-07-2026, grades added 25-07-2026):** a Faculty Member may author for a subject when EITHER (a) they teach it in the current term's published timetable (TTM), or (b) they hold an active `subject-author` grant — an HoD-issued, Department-scoped grant from the AUTH role registry, optionally time-bound — covering between-term windows and supplementary-exam top-ups. **Authoring is limited to the Professor / Associate Professor / Assistant Professor grades — Tutors and Assistant Teaching Staff cannot author** (per the access matrix), even when they teach the subject. Bank content itself is term-independent; only the authoring right is checked at write time.
 1. Only questions in status **APPROVED** are eligible for assembly. Draft, pending, rejected, retired, and leaked-flagged questions are never selectable.
 2. Moderation is mandatory and applies identically to human-authored questions and AI-generated variations; a moderator cannot approve their own submissions.
 3. AI may (a) select/optimize questions against a blueprint and (b) generate variations (paraphrase, parameter change) of existing bank questions, which enter the bank as **new entries pending moderation**. AI never places unmoderated content into a final paper.
@@ -153,6 +153,8 @@ All actions above write to the central append-only audit service (see 01-authent
 - Subject–Faculty Member mapping (who can author for which subject) comes from the current term's published timetable (03-timetable-management.md) plus HoD-issued `subject-author` grants (AUTH role registry) for out-of-term authoring.
 - SYL module (07-syllabus-coverage.md) exposes per-subject topic-coverage status queryable by exam-prep cutoff date.
 - "Subject coordinator" is an org-scoped role grant per AUTH, designated by the HoD.
+- "Exam Cell" is led by the **Controller of Examination** (reports to the Registrar) per the AUTH role registry; all Exam Cell powers in this document are exercised under that unit.
+- **Reconciliation note (25-07-2026):** the access matrix's question-paper rows (Faculty Dean "template approval", School Incharge "template create and paper approval", course-coordinator generation) were reviewed with the stakeholder and the **Exam-Cell-centric blueprint/assembly model was deliberately retained**; the matrix's "question paper evaluation" column (subject-mapped teaching staff) is recorded as evaluator-eligibility data for a possible future module — evaluation itself stays out of scope.
 - Exam schedules (dates, hence release times) are known to the Exam Cell from the external exam system; UniCore stores release time per exam but does not schedule exams.
 - Printing and physical distribution of papers happen outside UniCore; the watermarked PDF is the module's final artifact.
 

@@ -18,7 +18,7 @@
 | Student Promotion | Per-School configurable promotion workflows over computed eligibility (attendance %, results, backlogs) |
 | Syllabus Coverage | Per-period topic logging against an approved plan, with lag alerts to HoDs |
 | Question Paper Generation | Moderated question bank + blueprint assembly (AI-assisted), sealed until exam-cell release |
-| Executive Email Client | AI triage/summarize/draft for top leadership — draft-only, a human always sends |
+| Executive Email Client | Two-tier PA client: email+tasks for ~2,000 staff (no AI); AI triage/summarize/draft for ~20 leadership roles — draft-only, a human always sends |
 | Leave Management | Hierarchy-routed leave approvals with auto-cascade past absent approvers and delegation windows |
 
 ## Organization model
@@ -27,7 +27,7 @@
 University → Faculty Division → School → Department → Program → Section
 ```
 
-Multiple campuses; each School chooses semester- or year-based programs and owns its own promotion workflow. Roles support additional charge (one person, multiple units) under a strict one-active-holder-per-unit rule.
+Multiple campuses and 7 Faculty Divisions; each School (headed by a School Incharge, under a Faculty Dean and Dean Academic Affairs) chooses semester- or year-based programs and owns its own promotion workflow. Roles support additional charge (one person, multiple units) under a strict one-active-holder-per-unit rule.
 
 ## Status
 

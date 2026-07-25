@@ -4,7 +4,7 @@ Module code: EML · Status: DRAFT — pending approval · Last updated: 2026-07-
 
 ## 1. Summary
 
-EML is an email client for the university's **top leadership only** — VC, Pro-VC, Registrar, campus Principals/Directors, and Deans (~10–30 users, strictly role-gated). Each executive connects their **institutional** Gmail/Outlook mailbox via OAuth. AI agents triage and prioritize the inbox, categorize mail into configurable categories, summarize long threads, extract action items, and draft replies — from thread context or from an instruction. The module's hard boundary is absolute: **the AI never sends anything**. Every outgoing message is reviewed and explicitly sent by the executive; the AI also never deletes, archives, or forwards autonomously. Mailbox content is dense with third-party personal data, so DPDP purpose limitation, per-user isolation, prompt-injection defense, and no-training guarantees are first-class requirements, not afterthoughts.
+EML is the university's **PA (email + tasks) client, in two tiers** (locked 25-07-2026 per sources/module_access_matrix.xlsx). **Tier 1 — "Access to AI"** (~20 leadership roles: Chancellor, VC, Registrar, Dean Academic Affairs, Faculty Deans, School Incharges, Dean Research, Dean Student Welfare, Dean IQAC, Finance Officer, Controller of Examination, Dean Admin & R&A, PRO, plus Principals/Directors if confirmed): the full client with AI features. **Tier 2 — mail + tasks, no AI** (HoDs, all teaching grades, and most admin staff per the matrix — ~2,000 users): the same email client and task integration with **every AI feature absent — no AI processing of tier-2 mailboxes at all**. Students, security, canteen, hospitality, and alumni have no PA access. Each user connects their **institutional** Gmail/Outlook mailbox via OAuth. AI agents triage and prioritize the inbox, categorize mail into configurable categories, summarize long threads, extract action items, and draft replies — from thread context or from an instruction. The module's hard boundary is absolute: **the AI never sends anything**. Every outgoing message is reviewed and explicitly sent by the executive; the AI also never deletes, archives, or forwards autonomously. Mailbox content is dense with third-party personal data, so DPDP purpose limitation, per-user isolation, prompt-injection defense, and no-training guarantees are first-class requirements, not afterthoughts.
 
 ## 2. Goals & Non-Goals
 
@@ -16,8 +16,11 @@ EML is an email client for the university's **top leadership only** — VC, Pro-
 - Per-user mailbox isolation, prompt-injection defense, and audit of all AI actions.
 - Graceful degradation: the email client works fully when AI is unavailable.
 
+- Tier-2 mail client: the identical email experience (read, compose, send, folders, categories applied manually) for tier-2 roles, with zero AI surface.
+
 **Non-Goals**
-- Email for anyone outside the executive group — no faculty, staff, or student mailboxes.
+- Email for anyone outside the two PA tiers of the access matrix — no student mailboxes; no accounts for roles with a blank PA column (security, canteen, hospitality, alumni).
+- Any AI feature for tier-2 users — locked out, not merely disabled: tier-2 mailbox data never reaches the AI processor.
 - Any form of auto-send, scheduled send without final human confirmation, or "routine acknowledgment" automation — locked out permanently, not just for MVP.
 - Replacing the underlying mail provider — UniCore is a client over Gmail/Outlook, not a mail server.
 - Personal (non-institutional) mailbox connections.
@@ -27,11 +30,12 @@ EML is an email client for the university's **top leadership only** — VC, Pro-
 
 | Group | Access granted |
 |---|---|
-| Executives (VC, Pro-VC, Registrar, Principals/Directors, Deans) | Connect/disconnect own mailbox; full client + AI features over **own** mailbox only |
-| System Admin | Grant/revoke the executive-email role per 01-authentication-authorization-security.md; view connection status and AI-action audit metadata; **no mailbox content access** |
+| Tier 1 — "Access to AI" roles (per the AUTH registry's PA-tier record) | Connect/disconnect own mailbox; full client + AI features over **own** mailbox only |
+| Tier 2 — mail+tasks roles (HoDs, teaching grades, listed admin staff) | Connect/disconnect own mailbox; full email client + task integration over own mailbox; **no AI features, no AI processing of their mail** |
+| System Admin | Grant/revoke PA-tier roles per 01-authentication-authorization-security.md; view connection status and AI-action audit metadata; **no mailbox content access** |
 | Super Admin | Role catalog and category configuration governance; no mailbox content access |
 
-**Denied:** all other roles — including HoDs, Exam Cell, admin/office staff — have no access to this module. PAs/secretaries have no access in MVP (Open Question). No user, including admins, can read another user's mailbox content or AI outputs; support/debug tooling operates on metadata only.
+**Denied:** every role with a blank PA column in the access matrix (students, security, canteen, hospitality, alumni). PAs/secretaries have no delegate access in MVP (Open Question). No user, including admins, can read another user's mailbox content or AI outputs; support/debug tooling operates on metadata only.
 
 ## 4. Authorization & Business Rules
 
@@ -39,7 +43,8 @@ EML is an email client for the university's **top leadership only** — VC, Pro-
 
 | Action | Allowed | Notes / enforcement |
 |---|---|---|
-| Access EML module at all | Executive role grant only | Role-gated at API gateway; ~10–30 grants |
+| Access EML module at all | Tier-1 or tier-2 PA grant (AUTH registry) | Role-gated at API gateway; tier recorded on the grant |
+| Any AI endpoint (triage/summarize/extract/draft/proposals) | **Tier-1 mailbox owner only** | Tier-2 requests get 404 — the routes are absent from their surface; tier-2 mailbox data is never sent to the AI processor |
 | Connect/disconnect mailbox (OAuth) | The executive, for their own institutional mailbox only | Institutional-domain check on the OAuth account |
 | Read inbox / threads | Mailbox owner only | Per-user isolation, enforced at token + service layer |
 | Run AI triage/categorize/summarize/extract/draft | Mailbox owner only, over own mailbox context only | AI context builder can only load the requesting owner's data |
@@ -61,6 +66,7 @@ EML is an email client for the university's **top leadership only** — VC, Pro-
 7. Sensitive-category detection (e.g., medical, disciplinary content): the thread is flagged, and AI summaries/extracts of it are viewable only by the mailbox owner — never surfaced in any shared/aggregate view, and excluded from forward proposals.
 8. OAuth tokens are stored encrypted in the token vault (per AUTH secrets policy), scoped to read + draft + send, revocable by owner and by admin on role revocation.
 9. AI processing is purpose-limited to triage/categorize/summarize/extract/draft; mailbox data is never used to train any model; prompts/outputs are not retained beyond operational logs (30-day retention proposed).
+10. **Tier-2 is structurally AI-free (locked 25-07-2026):** tier-2 users' mailbox data never reaches the AI processor under any code path — no background triage, no on-demand features, no logs. The guarantee is architectural (the AI pipeline consumes only tier-1 context stores) and covered by the same CI isolation test class as cross-mailbox isolation. All human-in-the-loop, injection-defense, and isolation rules above apply to tier-1; the mail-client rules (OAuth, isolation, purge) apply to both tiers.
 
 ### Audit
 
@@ -80,7 +86,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 - Given I hold the executive role, when I complete the OAuth flow with my institutional account, then the connection is active with read+draft+send scopes and the token stored encrypted.
 - Given I attempt OAuth with a personal (non-institutional) account, when the callback returns, then the connection is rejected with an explanatory message.
 
-**US-EML-2** — As a Dean, I open my inbox and see it triaged so I handle the important items first.
+**US-EML-2** — As a Faculty Dean (tier 1), I open my inbox and see it triaged so I handle the important items first.
 - Given new mail since last sync, when triage runs, then messages carry priority and category labels (from the configured set) and long threads offer a summary with action items.
 - Given the AI service is down, when I open my inbox, then mail reads/sends work normally and AI features show a degraded-state indicator.
 
@@ -96,7 +102,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 
 ## 7. Functional Requirements
 
-- EML-FR-01: Role-gated module access — executive role grants only (~10–30 users) per 01-authentication-authorization-security.md.
+- EML-FR-01: Role-gated module access in two PA tiers per the AUTH registry (tier 1 "Access to AI" ~20–40 leadership users; tier 2 mail+tasks ~2,000 staff); tier recorded on the grant; blank-PA roles denied entirely.
 - EML-FR-02: OAuth connection for Gmail and Outlook institutional mailboxes; scopes limited to read + draft + send; institutional-domain validation; tokens encrypted in the vault; owner- and admin-revocable.
 - EML-FR-03: Inbox sync (incremental) with provider APIs; sync status and last-sync timestamp visible; stale-inbox indicator when sync lags.
 - EML-FR-04: AI triage/prioritization of unread and incoming mail.
@@ -116,6 +122,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 - EML-FR-18: Degraded mode — full email read/compose/send functions when the AI service is unavailable.
 - EML-FR-19: Disconnect & purge — on role revocation or user-initiated disconnect: tokens revoked at provider, cached mailbox data, AI context, and unsent drafts purged; purge completion audited.
 - EML-FR-20: Operational log retention for AI prompts/outputs limited to 30 days (proposed), then hard-deleted; audit metadata retained per AUTH.
+- EML-FR-21: **Tier-2 AI-free guarantee:** no AI endpoint exists on the tier-2 surface (404, not 403-after-processing); the AI context builder can only read tier-1 context stores; a CI test proves a tier-2 marker mailbox never appears in any AI processor request log. Tier-2 gets the full non-AI client: read/compose/send, manual categories, task integration, sync, disconnect/purge.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -142,7 +149,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 - Draft generation: < 20 s (p95), including citation resolution.
 - Triage/categorization of a new message: < 30 s from sync (p95).
 - Availability: 99% during business hours (08:00–18:00 IST) for the client; AI feature availability may be lower (degraded mode covers the gap) but core mail read/send tracks the 99% target.
-- Scale: ≤ 30 concurrent executive users; mailboxes to 100k+ messages (windowed sync per §8).
+- Scale: tier 1 ≤ 40 users; tier 2 ~2,000 connected mailboxes, sized for 500 concurrent sessions in academic hours; mailboxes to 100k+ messages (windowed sync per §8); AI-processing capacity sized for tier 1 only.
 - Security: tokens AES-256 encrypted in the managed vault; TLS 1.2+ to providers and AI processor; per-user data partitions; AI prompt/output logs auto-deleted at 30 days.
 - Isolation test (EML-FR-14) runs in CI on every release — a failure blocks deployment.
 
@@ -201,7 +208,8 @@ flowchart TD
 |----|------------------|----------|----------|---------------|-------|-----------------|--------|
 | TC-EML-001 | OAuth connect institutional mailbox | Happy | P0 | Executive role granted | Complete OAuth with institutional account | Connected; token encrypted in vault; scopes = read+draft+send | EML-FR-02, US-EML-1 |
 | TC-EML-002 | Personal account rejected | Negative | P1 | Executive role granted | OAuth with personal Gmail | Connection rejected with explanation | EML-FR-02, US-EML-1 |
-| TC-EML-003 | Non-executive denied module | Access | P0 | HoD account, no executive grant | Call any EML API | 403; module absent from UI | EML-FR-01, §4 |
+| TC-EML-003 | Blank-PA role denied module | Access | P0 | Security-staff account (no PA tier) | Call any EML API | 403; module absent from UI | EML-FR-01, §4 |
+| TC-EML-020 | Tier-2 user: full mail, zero AI surface | Access | P0 | HoD account (tier-2 grant), connected mailbox with marker content | 1. Read/compose/send mail 2. Call every AI endpoint 3. Inspect AI processor request logs | Mail works fully; AI endpoints 404; marker content absent from all AI processor logs (CI guarantee) | EML-FR-21, §4 rule 10 |
 | TC-EML-004 | Triage + categorization on new mail | Happy | P1 | Connected mailbox, new messages | Sync; open inbox | Priority + category labels from configured set applied | EML-FR-04/05, US-EML-2 |
 | TC-EML-005 | Thread summarization with citations | Happy | P1 | 40-message thread | Request summary | Summary + action items; factual claims cite source messages | EML-FR-06/09 |
 | TC-EML-006 | AI cannot send — no pathway | Access | P0 | Draft exists; simulate every AI/service code path and direct API calls without an interactive owner session | Attempt send via each non-human path | No message sent; no AI-callable send route exists; attempts logged | EML-FR-10, US-EML-3, §4 rule 1 |

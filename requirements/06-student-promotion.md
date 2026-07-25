@@ -31,7 +31,7 @@ Promotion moves students from their current semester/year to the next one at ter
 | Class In-charge | Review stage for their Section (where configured in the chain); annotate cases; initiate condonation requests with documents |
 | Faculty Members (non-in-charge) | No access to promotion data (they see attendance/coverage in their own modules only) |
 | HoD | Approve/override at their chain step for their Department's Programs; view Department promotion registers |
-| School Dean | Configure the School's promotion workflows; ratify promotions; co-approve rollbacks |
+| School Incharge | Configure the School's promotion workflows; ratify promotions; co-approve rollbacks |
 | Registrar | Co-approve rollbacks; view all registers (read-only) |
 | Admin/office staff | Trigger promotion runs (Program scope); perform post-commit section re-allotment; upload condonation documents on behalf of students |
 | Exam Cell | Manage the results-import feed from the external exam system (read/import only; no promotion decisions) |
@@ -44,15 +44,15 @@ Promotion moves students from their current semester/year to the next one at ter
 
 | Action | Allowed | Scope check |
 |---|---|---|
-| Configure workflow (criteria, chain, exception paths) per Program | School Dean (own School); Super Admin (setup assistance) | School |
+| Configure workflow (criteria, chain, exception paths) per Program | School Incharge (own School); Super Admin (setup assistance) | School |
 | Trigger promotion run for a Program | Admin/office staff, HoD | Program within own scope |
-| View promotion register | Chain participants for their step scope; HoD (Department); Dean (School); Registrar (all, read-only) | Org unit |
+| View promotion register | Chain participants for their step scope; HoD (Department); School Incharge (School); Registrar (all, read-only) | Org unit |
 | Review/annotate cases | Class In-charge (own Section), when that step is configured | Section |
 | Approve/reject at a chain step | The role configured for that step only, in order | Step's org unit |
 | Override a computed outcome (mandatory reason) | Any chain approver at their step; reason required, audited | Step's org unit |
-| Approve condonation | The approver role configured for the condonation path (e.g., HoD or Dean) | Org unit |
-| Ratify (final commit) | Final chain step — School Dean by default; School-configurable | School |
-| Initiate rollback of a committed promotion | School Dean | School |
+| Approve condonation | The approver role configured for the condonation path (e.g., HoD or School Incharge) | Org unit |
+| Ratify (final commit) | Final chain step — School Incharge by default; School-configurable | School |
+| Initiate rollback of a committed promotion | School Incharge | School |
 | Approve rollback (second approver) | Registrar | University |
 | Perform section re-allotment post-commit | Admin/office staff | Program |
 | Import results/credits feed | Exam Cell, System Admin (integration) | Campus/University |
@@ -69,7 +69,7 @@ All checks use the AUTH scope-aware permission API (see 01-authentication-author
 5a. **Ratification closes the term for the cohort:** when every student of a Section's cohort reaches a final state (promoted/detained/exited/transferred), PRM publishes a **term-closure event** for that Section. AUTH revokes all academic-term-bound grants on it (Class In-charge — AUTH-FR-13) and TTM archives the Section's timetable, ending all subject allocations at class level (TTM-FR-15). The new term starts clean: fresh Class In-charge designation by the HoD and a newly published timetable. Closure is per Section-cohort on each School's own schedule — semester Schools close twice a year, year-based Schools once.
 6. **Detained students** repeat the term/year; their record carries the detention decision and reason; they re-enter next term's run for their repeated term.
 7. **Condonation** requires: a category (medical/other), an uploaded supporting document, and approval by the configured condonation approver. Condoned attendance never rewrites ATT records — it is a PRM-level exception attached to the promotion decision.
-8. **Rollback:** only Dean-initiated + Registrar-approved, only before the new term's attendance capture begins for the affected student, fully audited with reason. Rollback reverts term advancement and re-opens the case at the ratification step. If the rollback re-opens a Section whose term-closure event already fired, the closure is reversed in the same transaction: revoked term-bound grants are restored (AUTH-FR-14) and the Section's archived timetable is un-archived (TTM-FR-15).
+8. **Rollback:** only School Incharge-initiated + Registrar-approved, only before the new term's attendance capture begins for the affected student, fully audited with reason. Rollback reverts term advancement and re-opens the case at the ratification step. If the rollback re-opens a Section whose term-closure event already fired, the closure is reversed in the same transaction: revoked term-bound grants are restored (AUTH-FR-14) and the Section's archived timetable is un-archived (TTM-FR-15).
 9. **Workflow configuration is versioned;** a run binds to the configuration version active at run start and keeps it for the run's lifetime (mid-run config changes affect only future runs).
 10. **Attendance freeze (locked 24-07-2026):** triggering a Program's promotion run publishes an **attendance-freeze event** for all of that Program's Sections' current-term Sessions (guaranteed delivery, outbox pattern). ATT enforces it (ATT-FR-11/12). Exemptions: (a) a correction attached to an open dispute/grievance commits for **non-ratified** students and recomputes the case per PRM-FR-12; (b) retro `counts-as-present` leave marking (ATT-FR-17) stays exempt until the student ratifies — after ratification the marking is skipped and surfaces here as post-ratification evidence (rollback/override only); (c) never-opened Periods resolve post-freeze by HoD-acknowledged write-off only. A run abandoned/discarded before any ratification lifts the freeze (audited).
 
@@ -87,8 +87,8 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 
 ## 6. User Stories & Acceptance Criteria
 
-**US-PRM-1** — As a School Dean, I configure my School's promotion workflow per Program so that our academic regulations are enforced as-is.
-- Given my Dean role for the School, when I set threshold 70%, max backlogs 4, and chain Class In-charge → HoD → Dean for Program X, then the next run for Program X uses exactly this configuration and the configuration change is audited.
+**US-PRM-1** — As a School Incharge, I configure my School's promotion workflow per Program so that our academic regulations are enforced as-is.
+- Given my School Incharge role for the School, when I set threshold 70%, max backlogs 4, and chain Class In-charge → HoD → School Incharge for Program X, then the next run for Program X uses exactly this configuration and the configuration change is audited.
 - Given a Program in another School, when I attempt to configure it, then I get 403 and the attempt is audited.
 
 **US-PRM-2** — As Admin/office staff, I trigger the term-end run for a Program so that the promotion register is generated.
@@ -99,19 +99,19 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 - Given a student at 73% attendance with an approved medical condonation, when I approve, then the case moves to the next step carrying the exception.
 - Given I override a not-eligible student to eligible, when I submit without a reason, then the override is rejected; with a reason, it is applied and audited with before/after state.
 
-**US-PRM-4** — As a School Dean, I ratify the register so that promotions commit.
+**US-PRM-4** — As a School Incharge, I ratify the register so that promotions commit.
 - Given all prior steps are complete, when I ratify, then students advance to the next semester/year, statuses publish to ONB/TTM/ATT, and students are notified — with Section unassigned until Admin re-allotment.
 
 **US-PRM-5** — As a Student, I see my outcome and can contest inputs so that errors do not cost me a year.
 - Given a not-eligible outcome from an attendance error, when my grievance leads to a Class In-charge correction in ATT, then my (non-ratified) case is recomputed and re-listed in the current run.
 
 **US-PRM-6** — As a Registrar, I co-approve a rollback so that a wrong commit is reversible under control.
-- Given a Dean-initiated rollback before new-term attendance capture began for the student, when I approve, then the promotion reverts, the case re-opens at ratification, and the full sequence is audited.
+- Given a School Incharge-initiated rollback before new-term attendance capture began for the student, when I approve, then the promotion reverts, the case re-opens at ratification, and the full sequence is audited.
 - Given the new term's attendance capture has begun for that student, when rollback is attempted, then it is refused with an explanatory error.
 
 ## 7. Functional Requirements
 
-- PRM-FR-01: Per-Program workflow configuration by the School Dean: attendance threshold (default 75%, per subject and/or aggregate), max backlogs for promotion, credit minimums, chain steps + approver roles, exception paths (condonation, carry-over, detention). Versioned; runs bind to a version.
+- PRM-FR-01: Per-Program workflow configuration by the School Incharge: attendance threshold (default 75%, per subject and/or aggregate), max backlogs for promotion, credit minimums, chain steps + approver roles, exception paths (condonation, carry-over, detention). Versioned; runs bind to a version.
 - PRM-FR-02: Results/credits import interface from the external exam system, with per-student import status visible (imported / missing / failed) and re-import supported. Managed by Exam Cell.
 - PRM-FR-03: Promotion run per Program (semester- or year-based): compute attendance % (ATT, captured Sessions only), credits, and backlog count per student; snapshot inputs; assign each student to eligible / eligible-with-exceptions / not-eligible.
 - PRM-FR-04: Partial runs — students with missing results or unresolved attendance grievances are held out (`blocked` / `excluded-flagged`) while the rest proceed; held students join via a later re-run.
@@ -124,11 +124,11 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 - PRM-FR-10a: Term-closure event per Section-cohort once all its students reach a final state: triggers AUTH revocation of term-bound grants (Class In-charge) and TTM archival of the Section's timetable/subject allocations; guaranteed delivery (outbox pattern); reversed atomically by an in-window rollback.
 - PRM-FR-11: Post-commit section re-allotment as a separate Admin/office-staff step; promoted students are section-less until allotted; TTM/ATT for the new term activate per student only after allotment.
 - PRM-FR-12: Recompute on input correction: any non-ratified case is recomputed when its ATT data or imported results change; ratified cases are never silently recomputed (rollback flow only).
-- PRM-FR-13: Rollback flow: Dean initiates + Registrar approves; allowed only before the student's new-term attendance capture begins; reverts advancement, re-opens at ratification, fully audited.
+- PRM-FR-13: Rollback flow: School Incharge initiates + Registrar approves; allowed only before the student's new-term attendance capture begins; reverts advancement, re-opens at ratification, fully audited.
 - PRM-FR-14: Final-term handling: students completing their last semester/year are routed to a graduation/exit list, not a promotion list; exit list is exported for the university's degree process (out of scope beyond the export).
 - PRM-FR-15: Approver-change continuity: when a chain role's holder changes (grant expiry/transfer), the successor inherits all pending approvals at that step with case history intact.
 - PRM-FR-16: Student-facing outcome view: own status, failing criteria if adverse, exception applied, and grievance route; nothing about other students.
-- PRM-FR-17: **Attendance freeze:** run trigger publishes the freeze event per business rule 10, scoped to the Program's Sections' current-term Sessions; consumed by ATT (correction window), LVE/ATT (retro-marking exemption boundary), and AUTH (edge-case reasoning). Freeze state is queryable per Program/term; lifting (run discard before any ratification) is Dean-approved and audited.
+- PRM-FR-17: **Attendance freeze:** run trigger publishes the freeze event per business rule 10, scoped to the Program's Sections' current-term Sessions; consumed by ATT (correction window), LVE/ATT (retro-marking exemption boundary), and AUTH (edge-case reasoning). Freeze state is queryable per Program/term; lifting (run discard before any ratification) is School Incharge-approved and audited.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -148,7 +148,7 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 | A few students stay `blocked-awaiting-results` while the rest of the Section ratifies | **DECISION:** the term-closure event waits — it fires only when **every** student of the cohort reaches a final state, so the Class In-charge and timetable stay active for the stragglers. If blocking drags past the configured term-archival date, the AUTH backstop revokes anyway and the remaining cases are handled via the exception flow with HoD acting where the In-charge role has lapsed. |
 | No Sessions captured at all for a subject (denominator zero) | **DECISION:** subject excluded from the attendance computation with a warning on the register (computed on captured sessions only, per ATT); an all-subjects-zero student lands in exceptions for manual decision. |
 | Rollback requested after new-term attendance capture began | **DECISION:** refused (hard rule); remediation moves to manual academic-administration process outside UniCore, recorded as an audited note on the case. |
-| Worst case: wrong criteria configured, discovered after ratification of a whole Program | **DECISION:** mass rollback uses the same Dean+Registrar flow applied per run (batch), still bounded by the attendance-capture window; students already past the window are handled case-by-case via next-term overrides. Configuration changes require a second Dean confirmation on save to reduce recurrence. |
+| Worst case: wrong criteria configured, discovered after ratification of a whole Program | **DECISION:** mass rollback uses the same School Incharge+Registrar flow applied per run (batch), still bounded by the attendance-capture window; students already past the window are handled case-by-case via next-term overrides. Configuration changes require a second School Incharge confirmation on save to reduce recurrence. |
 
 ## 9. Non-Functional Requirements
 
@@ -164,14 +164,14 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 
 - The external exam system exposes a machine-readable per-student results/credits feed with a stable student ID matching the ERP identity key (AUTH assumption).
 - Attendance denominators use captured Sessions only, as locked in ATT; the university accepts that uncaptured Periods do not penalize students.
-- Each School will designate exactly one final-ratification role (Dean by default) and one condonation approver per Program at configuration time.
+- Each School will designate exactly one final-ratification role (School Incharge by default) and one condonation approver per Program at configuration time.
 - "New term's attendance capture begins" is measurable per student as the first captured Session of any subject in the student's new term.
 - Section re-allotment procedures (merit-, alphabetical-, or balance-based) are the Admin's manual concern; PRM only enforces that it happens post-commit.
 
 ## 11. Open Questions
 
 - Should fee clearance (tracked outside UniCore) gate ratification via an imported flag, or stay fully out of scope? Proposed: fully out of scope for MVP.
-- Do any Schools require a Faculty-Division-level ratification step above the Dean (e.g., for professional-body-accredited Programs)? The chain engine supports it; needs confirmation per School.
+- Do any Schools require a Faculty-Division-level ratification step above the School Incharge (e.g., for professional-body-accredited Programs)? The chain engine supports it; needs confirmation per School.
 - Retention beyond 7 years: does university statute mandate permanent retention of promotion registers? Proposed: permanent for the final outcome record, 7 years for working artifacts.
 
 ## 12. Flow Diagram
@@ -204,10 +204,10 @@ flowchart TD
   K -- "Override (mandatory reason, audited)" --> J
   K -- Approve --> L{All steps complete?}
   L -- No --> J
-  L -- Yes --> M[Dean ratifies — commit: advance term · set status · notify · publish to ONB/TTM/ATT]
+  L -- Yes --> M[School Incharge ratifies — commit: advance term · set status · notify · publish to ONB/TTM/ATT]
   M --> N[Admin performs section re-allotment (separate step)]
   M --> O{Rollback needed?}
-  O -- "Yes, before new-term attendance capture" --> P{Dean initiates + Registrar approves?}
+  O -- "Yes, before new-term attendance capture" --> P{School Incharge initiates + Registrar approves?}
   P -- Yes --> Q[Revert advancement · re-open at ratification · audit]
   P -- No --> R[Rollback refused · audited]
   O -- "Yes, after capture began" --> R
@@ -228,10 +228,10 @@ flowchart TD
 | TC-PRM-009 | Recompute resets non-ratified case | Happy | P1 | Case at step 2; ATT correction lands | Correction saved | Case recomputed, reset to step 1, "recomputed" marker shown | PRM-FR-12, §8 |
 | TC-PRM-010 | Ratified case not silently recomputed | Negative | P0 | Case ratified; ATT correction lands | Correction saved | Ratified outcome unchanged; rollback/override paths only | PRM-FR-12/13 |
 | TC-PRM-011 | Concurrent double run trigger | Concurrency | P1 | Run active for Program | Second trigger fired simultaneously | Second rejected, points to active run; single run persists | §8 lock |
-| TC-PRM-012 | Chain step approval by wrong role | Access | P0 | Chain = In-charge → HoD → Dean; case at HoD step | Dean of another School / Faculty Member attempts approval | 403; attempt audited | §4 matrix |
-| TC-PRM-013 | Dean configures another School's workflow | Access | P0 | Dean scoped to School A | Edit School B Program config | 403; attempt audited | §4 matrix, US-PRM-1 |
-| TC-PRM-014 | Rollback inside window | Happy | P1 | Ratified student; no new-term Session captured | Dean initiates; Registrar approves | Reverted, re-opened at ratification, fully audited | PRM-FR-13, US-PRM-6 |
-| TC-PRM-015 | Rollback after attendance capture began | Negative | P0 | One new-term Session captured for student | Dean initiates rollback | Refused with explanatory error; attempt audited | PRM-FR-13, §8 |
+| TC-PRM-012 | Chain step approval by wrong role | Access | P0 | Chain = In-charge → HoD → School Incharge; case at HoD step | School Incharge of another School / Faculty Member attempts approval | 403; attempt audited | §4 matrix |
+| TC-PRM-013 | School Incharge configures another School's workflow | Access | P0 | School Incharge scoped to School A | Edit School B Program config | 403; attempt audited | §4 matrix, US-PRM-1 |
+| TC-PRM-014 | Rollback inside window | Happy | P1 | Ratified student; no new-term Session captured | School Incharge initiates; Registrar approves | Reverted, re-opened at ratification, fully audited | PRM-FR-13, US-PRM-6 |
+| TC-PRM-015 | Rollback after attendance capture began | Negative | P0 | One new-term Session captured for student | School Incharge initiates rollback | Refused with explanatory error; attempt audited | PRM-FR-13, §8 |
 | TC-PRM-016 | Approver role handover mid-workflow | Concurrency | P1 | HoD grant transferred; 12 cases pending at HoD step | Successor opens queue | All 12 pending cases visible with history; handover audited | PRM-FR-15, §8 |
 | TC-PRM-017 | Final-term student takes exit path | Boundary | P1 | Student in last semester of Program | Run | Routed to graduation/exit list, not advanced | PRM-FR-14, §8 |
 | TC-PRM-018 | Erasure request on promotion record | Legal | P1 | Detained student files erasure grievance | Process request | Response cites academic-record retention exemption; request logged | §5 |

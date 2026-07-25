@@ -12,7 +12,7 @@ Admissions, fee collection, and examinations conduct/valuation are **out of scop
 
 ```
 University
-└── Faculty Division (e.g., Faculty of Engineering)   [multiple]
+└── Faculty Division (7 today: FET, FMC, FHSS, FSC*, FMS, FHS, Agri)
     └── School                                        [multiple]
         └── Department                                [multiple]
             └── Program (semester-based OR year-based) [multiple]
@@ -20,10 +20,11 @@ University
 ```
 
 - The university operates **multiple campuses**; campus is an organizational dimension on Schools/Departments/venues/users.
+- **Source of truth for roles & access:** the university's role hierarchy and module-access matrix is [`sources/module_access_matrix.xlsx`](sources/module_access_matrix.xlsx) (received 25-07-2026; \*"FSC" carries a "confirm" note in the sheet, and the Agri Division's label needs correction — both flagged in AUTH open questions).
 - **Each School decides** whether its programs run on semesters or years, and each School owns its own promotion workflow.
 - All data visibility and administrative authority is scoped by org unit (campus / Faculty Division / School / Department / Program / Section).
 - **Org-unit lifecycle:** Faculty Divisions, Schools, Departments, and Programs are created/renamed/deactivated (never deleted) by the University Super Admin, fully audited (see AUTH doc). A **Section is a per-term instance** — (Program, term, label), with labels like "3B" reusable across terms — created by the **Timetable Cell during term setup** (see TTM doc); ONB section allotment and TTM draft authoring depend on the term's Section instances existing first. Term-closure archives a Section instance; a PRM rollback un-archives the old instance without colliding with the new term's Sections.
-- **School academic calendar:** before each semester/year, every School uploads its term calendar — start/end dates, exam-date ranges, special-event dates, and the term-archival backstop date. School office staff upload; the Dean's approval is recorded before it becomes active; amendments are versioned and re-approved. Campus holidays/working days remain a separate System Admin-maintained campus calendar. Exam and special-event dates drive **soft warnings and cross-references only** in MVP (TTM scheduling warnings, TSK exam-duty conflict signal, LVE On-Duty overlap display) — never hard blocks.
+- **School academic calendar:** before each semester/year, every School uploads its term calendar — start/end dates, exam-date ranges, special-event dates, and the term-archival backstop date. School office staff upload; the School Incharge's approval is recorded before it becomes active; amendments are versioned and re-approved. Campus holidays/working days remain a separate System Admin-maintained campus calendar. Exam and special-event dates drive **soft warnings and cross-references only** in MVP (TTM scheduling warnings, TSK exam-duty conflict signal, LVE On-Duty overlap display) — never hard blocks.
 
 ## 3. Terminology
 
@@ -35,16 +36,23 @@ University
 | Class In-charge | Faculty Member designated as owner of a Section |
 | Period | One timetabled teaching slot |
 | Session | One delivered instance of a Period (carries attendance + syllabus log) |
-| Timetable Cell | Central campus team that builds timetables (MVP) |
-| Exam Cell | Non-teaching unit controlling exams and final question papers |
+| Timetable Cell | Central campus team that builds timetables (MVP); Faculty Dean offices submit timetable inputs to it |
+| Exam Cell | Non-teaching unit controlling exams and final question papers, led by the Controller of Examination |
+| School Incharge | Head of a School — holds every School-scoped power (promotion config+ratification, calendar approval, kind taxonomy, tag curation, attendance-impact policy, School Admin designation) |
+| Faculty Dean | Head of a Faculty Division (Dean FET, Dean FMC, …); line manager of the Division's School Incharges |
+| Dean Academic Affairs | University-level line manager of all Faculty Deans |
+| Controller of Examination (CoE) | Exam Cell lead, reports to the Registrar |
+| Teaching grades | Professor, Associate Professor, Assistant Professor, Tutor, Assistant Teaching Staff — all "Faculty Member" tier (Tutors/ATS cannot author question-bank entries) |
 
 ## 4. User groups
 
-Students · Faculty Members · HoDs · Admin/office staff · Executives (VC, Pro-VC, Registrar, campus Principals/Directors, Deans) · Non-teaching support (Exam Cell, Timetable Cell, lab assistants, etc.) · **Pro-Chancellor and Chancellor** (top of the reporting chain — minimal-capability accounts, introduced for leave approvals of VC/Registrar).
+Students · teaching staff in five grades (Professor, Associate Professor, Assistant Professor, Tutor, Assistant Teaching Staff) · HoDs · School Incharges · Faculty Deans · Dean Academic Affairs · Admin/office staff · Executives (Chancellor, VC, Registrar, campus Principals/Directors) · Non-teaching support (Exam Cell under the Controller of Examination, Timetable Cell, lab assistants, etc.) · the full non-academic staff tree from the access matrix (Dean Research, Dean Student Welfare & Chief Proctor with wardens/PE, Dean IQAC, Finance Officer chain, Dean Admin & R&A chain, PRO chain — accounts with minimal access: leave applicant, task assignee, tier-2 PA where granted; Dean Research/IQAC/Dean Admin get restricted dashboards that exclude School academic data) · **Chancellor** (top of the reporting chain — minimal-capability account approving VC/Registrar leave). **No Pro-Chancellor exists** (removed 25-07-2026 per the org chart). **Alumni get no accounts in MVP.**
 
-**Reporting chain** (AUTH-configured, used by leave routing and task escalation): Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor; Registrar → Pro-Chancellor; **Principal/Director → VC**. Non-academic staff resolve to their **unit head** per the AUTH role registry (e.g., Exam Cell → Registrar). Routing **cascades past chain levels that are on approved leave or vacant** (each hop recorded with its cause; the Chancellor is terminal).
+**Reporting chain** (AUTH-configured, used by leave routing and task escalation): Class In-charge → HoD → School Incharge → Faculty Dean → Dean Academic Affairs → VC → Chancellor; Registrar → Chancellor; **Principal/Director → VC** (Principals are absent from the org chart — existence flagged open). Non-academic staff resolve to their **unit head** per the AUTH role registry (e.g., Exam Cell → Registrar). Routing **cascades past chain levels that are on approved leave or vacant** (each hop recorded with its cause; the Chancellor is terminal).
 
-**Deliberately excluded:** parents/guardians and external examiners have no system access.
+**PA (email + tasks) access is two-tier** per the access matrix: tier 1 "Access to AI" (~20 leadership roles) gets the full EML client with draft-only AI; tier 2 (HoDs, all teaching grades, most admin staff) gets email + tasks with **no AI features**; students, security, canteen, hospitality, and alumni get no PA.
+
+**Deliberately excluded:** parents/guardians and external examiners have no system access; alumni have no accounts.
 
 ## 5. Modules
 
@@ -69,9 +77,9 @@ Students · Faculty Members · HoDs · Admin/office staff · Executives (VC, Pro
 4. **Corrections discipline:** captured attendance is modified only by the Class In-charge, with a mandatory reason, fully audited.
 5. **Promotion:** a per-School configurable workflow engine over system-computed eligibility inputs; thresholds (e.g., 75% attendance) are School-configurable, not hardcoded.
 6. **Question paper confidentiality:** papers are sealed/encrypted until Exam Cell release; contributing faculty never see the assembled final paper.
-7. **AI boundaries:** the executive email AI is draft-only — a human sends every message. No biometric data anywhere in the system.
+7. **AI boundaries:** the email AI is draft-only — a human sends every message — and exists only for tier-1 ("Access to AI") roles; tier-2 PA users get email + tasks with no AI processing of their mailboxes. No biometric data anywhere in the system.
 8. **Timetable MVP:** built manually by the central Timetable Cell with system-enforced clash detection; constraint-based auto-generation is a later phase and must not be architecturally precluded.
-9. **Additional charge & singleton leadership:** the same leadership role can be held at multiple org units by one person (a Dean managing a second School, an HoD temporarily heading another Department), but each org unit permits only **one active holder** — one HoD per Department, one Dean per School, one Class In-charge per Section — enforced at grant time; holders change only via an atomic supersede (revoke + issue together).
+9. **Additional charge & singleton leadership:** the same leadership role can be held at multiple org units by one person (the access matrix itself shows Dean FET holding FMC and Dean FMS holding FHS as additional charge), but each org unit permits only **one active holder** — one HoD per Department, one School Incharge per School, one Faculty Dean per Faculty Division, one Class In-charge per Section — enforced at grant time; holders change only via an atomic supersede (revoke + issue together).
 10. **Attendance freeze:** triggering a Program's promotion run (PRM) freezes attendance corrections for all of that Program's Sections' current-term Sessions. Post-freeze, a correction commits only when attached to an **open dispute/grievance** and only for non-ratified students; retro `counts-as-present` leave marking (LVE) stays exempt until the student ratifies; never-opened Periods resolve post-freeze by HoD-acknowledged write-off only. See PRM-FR-17.
 11. **Term-scoped academic assignments:** users hold multiple roles (an HoD can also be a Class In-charge — grants union normally), but roles tied to a teaching term are term-bound: the Class In-charge grant and every faculty subject allocation (which lives in the term's published timetable) are valid only for the current semester/year per the School. **Promotion ratification publishes a term-closure event per Section-cohort that revokes these grants and archives the timetable's subject allocations**; each new term starts with fresh HoD designation and a fresh published timetable. An in-window promotion rollback reverses the closure.
 

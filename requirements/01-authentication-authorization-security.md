@@ -38,11 +38,11 @@ UniCore operates its **own identity store** — no SSO in MVP. Every user (stude
 
 ### RBAC model
 
-- **Role**: named bundle of permissions (e.g., `class-incharge`, `timetable-cell`, `exam-cell`, `hod`, `dean`, `system-admin`).
+- **Role**: named bundle of permissions (e.g., `class-incharge`, `timetable-cell`, `exam-cell`, `hod`, `school-incharge`, `faculty-dean`, `dean-academic-affairs`, `system-admin`).
 - **Grant**: (user, role, org-unit scope, validity period). Examples: `hod @ Dept-CSE-CampusA`, `class-incharge @ Section-3B-BTech-CSE`.
 - A user may hold multiple grants. Effective permission = union of grants; every check evaluates permission **and** scope. Multi-role is normal and first-class: e.g., an **HoD who is also Class In-charge** of a Section holds both grants concurrently — each action is authorized against the grant that permits it, and the audit record names which grant was exercised.
-- **Additional charge (same role, multiple org units):** one person may hold the same leadership role at more than one org unit — a Dean managing their own School plus another School as additional charge, or an HoD (e.g., of AI & Data Science) temporarily managing the Computer Science Department. Each unit is a separate grant (typically time-bound for the additional charge), workflows in each unit route to the same person, and every audit record names the specific grant/scope exercised.
-- **Singleton leadership roles per org unit:** designated roles allow at most **one active grant per org unit** — one HoD per Department, one Dean per School, one Class In-charge per Section, and one VC / Registrar / Pro-Chancellor / Chancellor per University (the last two are top-of-hierarchy roles introduced by the Leave module, see 10-leave-management.md). Granting a second active holder is rejected; replacing the holder (e.g., a permanent HoD arriving to end an additional charge) uses the **supersede flow**: old grant revoked and new grant issued in one atomic, audited operation, so the unit is never leaderless and never double-headed.
+- **Additional charge (same role, multiple org units):** one person may hold the same leadership role at more than one org unit — the university's own org chart (sources/module_access_matrix.xlsx) shows Dean FET holding Faculty Division FMC and Dean FMS holding FHS as additional charge; an HoD (e.g., of AI & Data Science) may temporarily manage the Computer Science Department. Each unit is a separate grant (typically time-bound for the additional charge), workflows in each unit route to the same person, and every audit record names the specific grant/scope exercised.
+- **Singleton leadership roles per org unit:** designated roles allow at most **one active grant per org unit** — one HoD per Department, one School Incharge per School, one Faculty Dean per Faculty Division, one Class In-charge per Section, and one VC / Registrar / Dean Academic Affairs / Chancellor per University (the Chancellor is a top-of-hierarchy role introduced by the Leave module, see 10-leave-management.md; **no Pro-Chancellor exists** — removed 25-07-2026 per the org chart). Granting a second active holder is rejected; replacing the holder (e.g., a permanent HoD arriving to end an additional charge) uses the **supersede flow**: old grant revoked and new grant issued in one atomic, audited operation, so the unit is never leaderless and never double-headed.
 - Time-bound grants auto-expire; expiry is enforced at check time, not by cleanup jobs.
 - **Academic-term-bound grants:** roles that represent a teaching-term duty — `class-incharge` today, and any future per-term academic role — are bound to (role, org unit, **academic term**) rather than to fixed dates. The term is semester or year per the owning School. These grants are **revoked automatically by the term-closure event that PRM ratification publishes for the Section's cohort** (see 06-student-promotion.md), with the configured term-archival date as a backstop for cohorts that never ratify. A new term always requires fresh designation — nothing rolls over.
 - **Subject-teaching allocation is not an AUTH grant:** a Faculty Member's right to teach a subject in a Section for a term derives from the term's **published timetable** (see 03-timetable-management.md) and dies with that term's archival — AUTH stores no separate subject-allocation role, so there is exactly one source of truth for "who teaches what." (Question-bank *authoring* is the one exception: QPG accepts either current-term teaching or an HoD-issued `subject-author` grant from the registry below — see 08-question-paper-generation.md.)
@@ -55,18 +55,22 @@ Every role any module references is cataloged here; modules must not invent role
 |---|---|---|---|
 | `super-admin` | University | University governance (bootstrap) | All modules |
 | `system-admin` | Campus | Super Admin | All modules |
-| `hod`, `dean`, `class-incharge` | Dept / School / Section | Per singleton + supersede rules above | All modules |
+| `hod`, `school-incharge`, `faculty-dean`, `class-incharge` | Dept / School / Faculty Division / Section | Per singleton + supersede rules above | All modules |
+| `dean-academic-affairs` | University (singleton) | University governance | Reporting chain, LVE, dashboards |
+| Teaching grades: `professor`, `associate-professor`, `assistant-professor`, `tutor`, `assistant-teaching-staff` | Department | HoD / System Admin (provisioning) | All "Faculty Member" permissions are identical across grades; Tutors/ATS additionally excluded from QPG bank authoring |
 | `timetable-cell` | Campus | System Admin | TTM |
-| `exam-cell` (incl. lead) | Campus/University | Registrar | QPG, TSK (assigner grant), PRM (results import) |
-| `school-admin` (config role) | School | School Dean | ATT/TSK School-level configuration |
+| `exam-cell` (led by the `controller-of-examination`) | Campus/University | Registrar | QPG, TSK (assigner grant), PRM (results import), ATT (percentage-only read for the CoE) |
+| `school-admin` (config role) | School | School Incharge | ATT/TSK School-level configuration |
 | `subject-coordinator` | Department (subject set) | HoD | QPG moderation |
 | `subject-author` | Department (subject set) | HoD | QPG bank authoring outside a teaching term |
-| `school-exam-coordinator` | School | Exam Cell lead | QPG blueprints |
+| `school-exam-coordinator` | School | Controller of Examination | QPG blueprints |
 | `hr-designate` | University | Registrar | LVE catalog/quotas/HR export |
 | VC/Pro-VC office recipient list | University | Super Admin | TSK escalation top-of-chain |
-| `pro-chancellor`, `chancellor` | University (singleton) | University governance | LVE approvals |
+| `chancellor` | University (singleton) | University governance | LVE approvals (terminal approver) |
+| Non-academic unit heads: `dean-research`, `dean-student-welfare`, `dean-iqac`, `finance-officer`, `dean-admin-ra`, `public-relations-officer` | University | Registrar / VC per org chart | LVE routing, TSK escalation/visibility; restricted dashboards only (no School academic data) |
+| Non-academic staff roles (wardens, PE staff, exam-office staff, finance staff, HR, estate, facilities, IT cell, security, canteen, hospitality) | Unit | Their unit head | Accounts with minimal access: leave applicant, task assignee, tier-2 PA where the access matrix grants it |
 
-The registry also carries the **unit-head map** for non-academic staff (e.g., Exam Cell staff → Registrar; Department office staff → HoD), used by LVE routing, TSK escalation, and TSK skip-level visibility.
+The registry also carries the **unit-head map** for non-academic staff (e.g., Exam Cell staff → Controller of Examination → Registrar; Department office staff → HoD; wardens → Dean Student Welfare), used by LVE routing, TSK escalation, and TSK skip-level visibility. **PA tiers** (see 09-executive-email-ai.md) are recorded per role here: tier 1 "Access to AI" / tier 2 "mail+tasks, no AI" / none — sourced from sources/module_access_matrix.xlsx. **Alumni have no accounts** (MVP).
 
 ### Per-action authorization
 
@@ -135,9 +139,9 @@ Central append-only audit service. Every module writes: actor, action, object, s
 - AUTH-FR-13: Academic-term-bound grant type: grants carry (role, org unit, academic term); AUTH subscribes to PRM term-closure events and revokes all term-bound grants for the closed Section/cohort within 60 s; the configured term-archival date is the revocation backstop. Revocations are audited like any grant change.
 - AUTH-FR-14: PRM rollback (within its window) **restores** the term-bound grants that the rolled-back ratification revoked, so the Class In-charge regains authority over the re-opened cohort; restore events are audited.
 - AUTH-FR-15: Class In-charge designation flow: HoD designates one Class In-charge per Section per term (term-bound grant per AUTH-FR-13); re-designation mid-term supersedes (old grant revoked, new issued, both audited). Singleton enforcement per AUTH-FR-16.
-- AUTH-FR-16: Singleton-role enforcement: for designated leadership roles (`hod` per Department, `dean` per School, `class-incharge` per Section), the system rejects a second active grant on the same org unit; the only path to change holders is the atomic supersede operation (revoke + issue together, both audited). Enforcement is at grant-write time AND at permission-check time (a data-level anomaly fails closed).
-- AUTH-FR-17: Additional-charge grants: the same role may be granted to one person at multiple org units (Dean of School A + additional charge of School B; HoD of one Department temporarily heading another). Additional-charge grants are flagged as such, carry a validity period or "until-superseded" marker, and end automatically when a permanent holder is granted via supersede. All in-flight approvals at that unit transfer to the new holder per PRM-FR-15 continuity.
-- AUTH-FR-18: **Reporting-chain configuration** (University-level, role-based): Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor, with Registrar → Pro-Chancellor and **Principal/Director → VC**; non-academic staff resolve via the registry's unit-head map. Exposed as a resolution API ("who is X's reporting person") consumed by LVE routing/cascade (10-leave-management.md) and TSK escalation/visibility. The API also reports each level's **holder status (active / on-approved-leave / vacant)** so consumers can cascade past on-leave or vacant levels. Changes are audited; the chain must be acyclic with Chancellor as the unique terminal.
+- AUTH-FR-16: Singleton-role enforcement: for designated leadership roles (`hod` per Department, `school-incharge` per School, `faculty-dean` per Faculty Division, `class-incharge` per Section, `dean-academic-affairs`/`chancellor` per University), the system rejects a second active grant on the same org unit; the only path to change holders is the atomic supersede operation (revoke + issue together, both audited). Enforcement is at grant-write time AND at permission-check time (a data-level anomaly fails closed).
+- AUTH-FR-17: Additional-charge grants: the same role may be granted to one person at multiple org units (Faculty Dean of one Division + additional charge of another — live examples in the org chart: FET+FMC, FMS+FHS; HoD of one Department temporarily heading another). Additional-charge grants are flagged as such, carry a validity period or "until-superseded" marker, and end automatically when a permanent holder is granted via supersede. All in-flight approvals at that unit transfer to the new holder per PRM-FR-15 continuity.
+- AUTH-FR-18: **Reporting-chain configuration** (University-level, role-based): Class In-charge → HoD → School Incharge → Faculty Dean → Dean Academic Affairs → VC → Chancellor, with Registrar → Chancellor and **Principal/Director → VC** (Principals absent from the org chart — see Open Questions); non-academic staff resolve via the registry's unit-head map. Exposed as a resolution API ("who is X's reporting person") consumed by LVE routing/cascade (10-leave-management.md) and TSK escalation/visibility. The API also reports each level's **holder status (active / on-approved-leave / vacant)** so consumers can cascade past on-leave or vacant levels. Changes are audited; the chain must be acyclic with Chancellor as the unique terminal.
 - AUTH-FR-19: **Org-structure administration:** Super Admin creates, renames, re-parents, and deactivates org units (Faculty Division, School, Department, Program). Units are never hard-deleted (history and scoped grants hang off them); deactivation blocks new grants/imports against the unit while preserving reads. All changes audited with before/after. Section instances are NOT managed here — they are per-term entities created by the Timetable Cell during term setup (TTM-FR-19).
 
 ## 8. Edge Cases, Worst Cases & Decisions
@@ -171,12 +175,15 @@ Central append-only audit service. Every module writes: actor, action, object, s
 - The university can send SMS at scale (DLT-registered sender) — India SMS regulations apply.
 - ERP provides a stable unique student ID used as the identity join key.
 - All admitted students are 18 or older (university admission policy, locked 24-07-2026); no minor-consent handling is required or built.
+- The role hierarchy and per-module access matrix in `requirements/sources/module_access_matrix.xlsx` (received 25-07-2026) is the stakeholder source of truth for the registry above; discrepancies discovered later are reconciled through the SME clarification pass, not silently.
 - Staff data (mobile/email) is accurate enough in ERP for OTP delivery at go-live.
 
 ## 11. Open Questions
 
 - Which SMS provider/DLT header does the university already have? (Affects OTP integration only.)
 - Should executives get hardware-key (FIDO2) as an optional stronger factor? Proposed: yes, post-MVP.
+- **Campus Principals/Directors are absent from the org chart** (sources/module_access_matrix.xlsx) yet referenced by TSK/LVE — confirm whether the role exists; if not, remove Principal → VC from the chain and TSK assigner set.
+- The org chart marks "Dean FSC — Faculty of Science **(confirm)**" and labels the Agri Division "Faculty of Health Sciences Agri" (apparent copy error) — confirm both names before org-unit setup.
 
 ## 12. Flow Diagram
 

@@ -31,9 +31,12 @@ Attendance in UniCore is captured per **Session** — one delivered instance of 
 | Students (on the Session roster) | Scan QR from registered device, view own attendance records and percentages, raise a dispute to the Class In-charge |
 | Class In-charge | Everything a Faculty Member can do for their own Sessions, plus: correct locked attendance records (with reason), resolve student disputes |
 | HoD | Read-only attendance dashboards for their Department; receives never-opened-Session flags |
-| Dean / Principal / Executives | Read-only aggregate dashboards within org scope |
+| School Incharge / Faculty Dean / Principal / Executives | Read-only aggregate dashboards within org scope |
 | School Admin (config role) | Configure grace window, QR rotation interval within 15–30 s, escalation and percentage thresholds for their School |
+| Controller of Examination | **Percentage-only view** — aggregate attendance percentages per student/cohort; never raw per-Session records (locked 25-07-2026 per access matrix) |
 | System | Computes percentages, flags never-opened Sessions, exposes read API to PRM |
+
+*Teaching grades:* Professor, Associate Professor, Assistant Professor, Tutor, and Assistant Teaching Staff all act as "Faculty Member" here with identical permissions — QR Sessions for the Periods they teach; manual marking/corrections only via the Class In-charge role where they hold it.
 
 **Denied:** students see only their own records — never classmates'. Faculty Members not assigned to a Period (and not official substitutes or committed swap counterparts per TTM-FR-17) cannot open its Session. Nobody, including Super Admin, can edit locked attendance except the Class In-charge via the correction flow.
 
@@ -52,7 +55,8 @@ Attendance in UniCore is captured per **Session** — one delivered instance of 
 | Correct attendance after close | Class In-charge of the Section only; mandatory reason | API + service layer |
 | Raise attendance dispute | Student, on their own record only | API |
 | Configure grace window / thresholds / rotation interval | School Admin within own School scope | API |
-| Read percentages | Student (own), Class In-charge/HoD/Dean/Principal (scope), PRM module (service account) | API |
+| Read percentages | Student (own), Class In-charge/HoD/School Incharge/Faculty Dean/Principal (scope), Controller of Examination (percentages only, University scope), PRM module (service account) | API |
+| Read raw per-Session records | Class In-charge/HoD (scope); explicitly DENIED to the Controller of Examination and exam-office staff | API |
 
 ### Business rules
 
@@ -131,6 +135,7 @@ Every Session open/close, pending-scan resolution, manual mark, correction, and 
 - ATT-FR-16: Faculty live view during scanning: running scanned count and pending count (no student-by-student proximity detail beyond status).
 - ATT-FR-17: Approved-leave marking (LVE integration): when a student's approved leave of a `counts-as-present` type covers a Session (including retro approvals), the system marks the student per the School's policy automatically, audited with the leave reference — outside the Class In-charge correction flow and not counted against it; `absent` and `condonation-evidence` leave types never alter ATT records (see 10-leave-management.md). **Freeze interaction:** automatic marking stays exempt from the attendance freeze until the student ratifies (the PRM case recomputes per PRM-FR-12); once the student is ratified, the leave approval commits but marking is skipped and flagged to PRM as post-ratification evidence (rollback/override paths only).
 - ATT-FR-18: **Device-less students:** device registration is required only to scan. A student may remain without a registered device indefinitely; the Class In-charge may set a `no-device` flag so faculty expect a manual mark during count verification each Session (not treated as an anomaly); web-portal viewing of own records works without a registered device. The flag is informational, audited, and reversible on device registration.
+- ATT-FR-19: **Controller of Examination percentage-only read** (locked 25-07-2026): a University-scoped read grant exposing per-student/cohort attendance percentages only; raw per-Session and per-scan records are structurally excluded from this API's response shape (not merely filtered); access audited like any percentage read.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -245,5 +250,6 @@ flowchart TD
 | TC-ATT-023 | Dispute-driven correction commits post-freeze | Boundary | P0 | Freeze fired; record has `dispute-open` flag; student not ratified | Class In-charge accepts the dispute and corrects with reason | Correction commits; flag cleared; PRM case recomputes; audited | ATT-FR-11/14, PRM-FR-17 |
 | TC-ATT-024 | Swap counterpart opens Session; original denied | Access | P0 | Committed swap gives Dr. Iyer Dr. Rao's Monday occurrence | 1. Dr. Iyer opens the Session 2. Dr. Rao attempts open on the same occurrence | Iyer's open succeeds; Rao gets 403 for that occurrence (audited); reciprocal occurrence mirrors | §4 matrix, TTM-FR-17 |
 | TC-ATT-025 | No-device student marked manually as standing path | Happy | P1 | Student flagged `no-device` by Class In-charge | Faculty runs count verification for a Session | Student appears as expected-manual; faculty marks present; no anomaly flag raised; mark audited | ATT-FR-18, §8 |
+| TC-ATT-026 | CoE sees percentages only, never raw records | Access | P0 | Controller of Examination account | 1. Query percentage API for a cohort 2. Attempt any per-Session/per-scan record API | Percentages returned; raw-record APIs 403 (audited); percentage payload contains no Session-level fields | ATT-FR-19, §4 matrix |
 
 Coverage: every §6 acceptance criterion, the §4 authorization matrix (incl. swap counterparts, TC-024), all four anti-fraud safeguards, the DPDP consent/minimization obligations (§5), the UGC configurability rule, the freeze semantics (TC-022/023), the no-device path (TC-025), and every §8 decision except faculty-device failure and timetable-republish history (deferred to integration testing with TTM) map to at least one test.

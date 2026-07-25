@@ -4,14 +4,14 @@ Module code: SYL · Status: DRAFT — pending approval · Last updated: 2026-07-
 
 ## 1. Summary
 
-Syllabus coverage tracking answers "are we teaching what we planned, on schedule?" per **subject offering** (subject × Section/elective-group × term). The approved syllabus is broken into units → topics; the teaching Faculty Member authors a planned schedule mapping topics to planned Periods/weeks, which the HoD approves. After each delivered Session (linked to the attendance session from the ATT module), the Faculty Member logs which topics were covered — or marks the Session as revision, test, or no-progress. Dashboards show % coverage vs plan per offering, rolled up to Department (HoD) and School (Dean); the HoD is alerted when an offering falls more than 2 weeks (configurable) behind plan. Coverage feeds the QPG module's exam-blueprint validation and an end-of-term coverage certification for compliance reporting.
+Syllabus coverage tracking answers "are we teaching what we planned, on schedule?" per **subject offering** (subject × Section/elective-group × term). The approved syllabus is broken into units → topics; the teaching Faculty Member authors a planned schedule mapping topics to planned Periods/weeks, which the HoD approves. After each delivered Session (linked to the attendance session from the ATT module), the Faculty Member logs which topics were covered — or marks the Session as revision, test, or no-progress. Dashboards show % coverage vs plan per offering, rolled up to Department (HoD) and School (School Incharge); the HoD is alerted when an offering falls more than 2 weeks (configurable) behind plan. Coverage feeds the QPG module's exam-blueprint validation and an end-of-term coverage certification for compliance reporting.
 
 ## 2. Goals & Non-Goals
 
 **Goals**
 - Structure each offering's approved syllabus as units → topics with a planned Period/week schedule.
 - Per-Session logging of topics covered (with revision / test / no-progress / partial markers), linked to the ATT Session.
-- Coverage-vs-plan dashboards: offering level, Department roll-up (HoD), School roll-up (Dean).
+- Coverage-vs-plan dashboards: offering level, Department roll-up (HoD), School roll-up (School Incharge).
 - Configurable lag alerts to the HoD (default: > 2 weeks behind plan).
 - Versioned mid-term plan revisions with HoD re-approval.
 - End-of-term coverage certification (Faculty Member certifies, HoD countersigns) feeding compliance reporting.
@@ -31,7 +31,7 @@ Syllabus coverage tracking answers "are we teaching what we planned, on schedule
 | Substitute / committed swap counterpart (TTM-FR-17) | Log coverage only for the specific Session they taught |
 | Class In-charge | Read-only coverage view for their Section's offerings |
 | HoD | Approve plans and revisions; Department roll-up dashboard; receive lag alerts; countersign certifications |
-| School Dean | School roll-up dashboard; read-only drill-down |
+| School Incharge | School roll-up dashboard; read-only drill-down |
 | Exam Cell | Read covered-topics status for blueprint validation; override coverage warnings in QPG (audited there) |
 | Admin/office staff | Read-only reports for compliance filings |
 | Students | No access in MVP (see Open Questions) |
@@ -48,8 +48,8 @@ Syllabus coverage tracking answers "are we teaching what we planned, on schedule
 | Approve plan / revision | HoD of the owning Department | Department |
 | Log coverage for a Session | Faculty Member who delivered that Session (incl. substitute or committed swap counterpart for their Session, per TTM-FR-11/17) | Session ownership from ATT/TTM |
 | Edit own log entry (history kept) | Original logger, until term certification | Session ownership |
-| View offering dashboard | Teaching Faculty Member, Class In-charge (Section), HoD, Dean | Org unit |
-| Configure lag threshold | HoD (Department default), Dean (School default) | Org unit |
+| View offering dashboard | Teaching Faculty Member, Class In-charge (Section), HoD, School Incharge | Org unit |
+| Configure lag threshold | HoD (Department default), School Incharge (School default) | Org unit |
 | Certify end-of-term coverage | Teaching Faculty Member (certify) + HoD (countersign) | Offering / Department |
 | Read covered-topics feed | QPG module service; Exam Cell | Offering |
 
@@ -108,7 +108,7 @@ Plan approvals/revisions, log edits, certification, re-opening, and threshold ch
 - SYL-FR-06: Substitute/swap logging: the Faculty Member who delivered the Session (per the TTM substitution record or committed swap, TTM-FR-17) logs it; access limited to that Session; the log names the actual deliverer; the owning Faculty Member sees it read-only.
 - SYL-FR-07: Combined-class / elective-group support: one offering-level log per Session across the roster context; no duplicate per-Section logs.
 - SYL-FR-08: Coverage computation: % of topics complete vs plan-to-date and vs full plan; partial topics count only when completed.
-- SYL-FR-09: Dashboards: offering view (Faculty Member, Class In-charge), Department roll-up (HoD), School roll-up (Dean), with drill-down and `late`/`no-attendance-session` flag visibility.
+- SYL-FR-09: Dashboards: offering view (Faculty Member, Class In-charge), Department roll-up (HoD), School roll-up (School Incharge), with drill-down and `late`/`no-attendance-session` flag visibility.
 - SYL-FR-10: Lag alerts: daily evaluation; alert HoD when lag > configured threshold (default 2 weeks); alert once per lag band per offering.
 - SYL-FR-11: Covered-topics feed for QPG blueprint validation at exam-prep cutoff; warning-only semantics, Exam Cell override handled in QPG (see 08-question-paper-generation.md).
 - SYL-FR-12: End-of-term certification: Faculty Member certifies final coverage %, HoD countersigns; logs freeze; HoD re-open flow for post-certification corrections (audited).
