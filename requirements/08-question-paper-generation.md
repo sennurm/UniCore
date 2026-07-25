@@ -27,7 +27,7 @@ QPG turns per-subject **question banks** maintained by Faculty Members into seal
 
 | Group | Access granted |
 |---|---|
-| Faculty Members | Author/edit/retire own bank questions for subjects they teach; view own questions' moderation status; **never** any assembled paper |
+| Faculty Members | Author/edit/retire own bank questions for subjects they qualify for (see authoring basis, §4 rule 0); view own questions' moderation status; **never** any assembled paper |
 | HoD / Subject Coordinator | Moderate (approve/reject with comments) bank entries in their scope; view bank analytics (counts by unit/difficulty); no assembled papers |
 | Exam Cell (incl. School exam coordinator) | Define blueprints, trigger assembly, view/download sealed papers, set/adjust release times, flag leaked questions, order regeneration |
 | System Admin | Role grants per 01-authentication-authorization-security.md; **no** paper content access |
@@ -54,6 +54,7 @@ QPG turns per-subject **question banks** maintained by Faculty Members into seal
 
 ### Business rules
 
+0. **Authoring basis (locked 24-07-2026):** a Faculty Member may author for a subject when EITHER (a) they teach it in the current term's published timetable (TTM), or (b) they hold an active `subject-author` grant — an HoD-issued, Department-scoped grant from the AUTH role registry, optionally time-bound — covering between-term windows and supplementary-exam top-ups. Bank content itself is term-independent; only the authoring right is checked at write time.
 1. Only questions in status **APPROVED** are eligible for assembly. Draft, pending, rejected, retired, and leaked-flagged questions are never selectable.
 2. Moderation is mandatory and applies identically to human-authored questions and AI-generated variations; a moderator cannot approve their own submissions.
 3. AI may (a) select/optimize questions against a blueprint and (b) generate variations (paraphrase, parameter change) of existing bank questions, which enter the bank as **new entries pending moderation**. AI never places unmoderated content into a final paper.
@@ -100,7 +101,7 @@ All actions above write to the central append-only audit service (see 01-authent
 
 ## 7. Functional Requirements
 
-- QPG-FR-01: Question CRUD by Faculty Members within subject scope; mandatory tags: unit, CO, difficulty (easy/medium/hard), marks, question type; optional attachments (figures).
+- QPG-FR-01: Question CRUD by Faculty Members within subject scope per the authoring basis (§4 rule 0: current-term timetable teaching OR active `subject-author` grant); mandatory tags: unit, CO, difficulty (easy/medium/hard), marks, question type; optional attachments (figures).
 - QPG-FR-02: Moderation workflow — PENDING → APPROVED / REJECTED(with comments); re-edit creates a new pending version; self-moderation blocked.
 - QPG-FR-03: Near-duplicate detection — on submit and at moderation, similarity check against the same subject's bank; matches above threshold shown to the moderator as a warning (non-blocking).
 - QPG-FR-04: Blueprint editor — per exam: total marks, duration, section structure (sections, questions per section, choice patterns), marks distribution across units/COs/difficulty; blueprint locks at first assembly.
@@ -127,6 +128,7 @@ All actions above write to the central append-only audit service (see 01-authent
 | Question flagged as leaked/compromised | Exam Cell flags it; the question **and all AI variations derived from it** are excluded from all future assemblies. Sealed papers already containing it are flagged and routed to Exam Cell for a regeneration decision per paper. |
 | Duplicate / near-duplicate questions in the bank | Similarity detection warns the moderator at submission and moderation time; moderator decides (approve anyway / reject as duplicate). Warning, not auto-rejection. |
 | Faculty Member leaves the university | Their bank entries remain — questions are university property (QPG-FR-17). Their account deactivation follows AUTH; authorship metadata is retained for audit. |
+| Term archived; Exam Cell asks for bank top-ups before a supplementary exam | The published-timetable authoring basis is gone with the archival; the HoD issues `subject-author` grants (§4 rule 0) to the chosen Faculty Members; authoring proceeds under the grant, moderation unchanged. |
 | Exam postponed | Exam Cell updates the release time; the seal is maintained unchanged; no regeneration required. The change is audited with reason. |
 | Emergency reprint after release | Post-release, Exam Cell downloads a fresh watermarked PDF; each download is individually watermarked and audited, so every physical copy traces to a person and time. |
 | Two moderators act on the same pending question concurrently | First decision wins (optimistic lock); the second moderator sees "already moderated" with the outcome. No double-processing. |
@@ -148,11 +150,11 @@ All actions above write to the central append-only audit service (see 01-authent
 
 ## 10. Assumptions
 
-- Subject–Faculty Member mapping (who can author for which subject) comes from timetable/allocation data (03-timetable-management.md) or admin configuration.
+- Subject–Faculty Member mapping (who can author for which subject) comes from the current term's published timetable (03-timetable-management.md) plus HoD-issued `subject-author` grants (AUTH role registry) for out-of-term authoring.
 - SYL module (07-syllabus-coverage.md) exposes per-subject topic-coverage status queryable by exam-prep cutoff date.
 - "Subject coordinator" is an org-scoped role grant per AUTH, designated by the HoD.
-- Exam schedules (dates, hence release times) are known to the Exam Cell from the external exam system; Tasq stores release time per exam but does not schedule exams.
-- Printing and physical distribution of papers happen outside Tasq; the watermarked PDF is the module's final artifact.
+- Exam schedules (dates, hence release times) are known to the Exam Cell from the external exam system; UniCore stores release time per exam but does not schedule exams.
+- Printing and physical distribution of papers happen outside UniCore; the watermarked PDF is the module's final artifact.
 
 ## 11. Open Questions
 
@@ -218,5 +220,6 @@ flowchart TD
 | TC-QPG-016 | Blueprint locked after assembly starts | Negative | P1 | Assembly triggered for exam E | Attempt blueprint edit for E | Blocked; edit possible only by discarding assembly run (audited) | QPG-FR-04, §8 |
 | TC-QPG-017 | Syllabus-coverage warning + override | Legal | P1 | SYL shows Unit 5 not covered by cutoff | Validate blueprint including Unit 5; override with reason | Warning raised, not a block; override recorded with reason in audit | QPG-FR-14, §8 |
 | TC-QPG-018 | Assembly performance | NFR | P2 | 2,000-question bank, standard blueprint | Assemble 3 sets | Completes < 90 s | §9 |
+| TC-QPG-019 | Between-term authoring via subject-author grant | Access | P0 | Term archived (no timetable basis); Faculty Member F | 1. F submits a question (no grant) 2. HoD issues `subject-author` grant to F 3. F resubmits | Step 1 rejected 403 (audited); step 3 accepted into PENDING with normal moderation | §4 rule 0, QPG-FR-01 |
 
 Coverage: every §6 acceptance criterion, the §4 authorization matrix (author-denial, self-moderation, pre-release access), all §8 edge cases except encryption-key loss (ops runbook drill, not an app test) map to at least one test; leak containment and the AI-moderation boundary are covered as P0.

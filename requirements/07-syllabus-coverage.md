@@ -18,7 +18,7 @@ Syllabus coverage tracking answers "are we teaching what we planned, on schedule
 - Covered-topics feed for QPG blueprint validation (see 08-question-paper-generation.md).
 
 **Non-Goals**
-- Authoring or approving the syllabus content itself (curriculum design happens in academic bodies outside Tasq; SYL consumes the approved unit/topic breakdown).
+- Authoring or approving the syllabus content itself (curriculum design happens in academic bodies outside UniCore; SYL consumes the approved unit/topic breakdown).
 - Grading, assessment, or student-facing learning content.
 - Attendance capture — that is ATT; SYL only links to its Sessions.
 - Auto-rescheduling the Timetable when an offering lags — alerts inform humans; TTM changes stay with the Timetable Cell.
@@ -28,7 +28,7 @@ Syllabus coverage tracking answers "are we teaching what we planned, on schedule
 | Group | Access granted |
 |---|---|
 | Faculty Member (teaching the offering) | Author/revise the plan; log coverage per Session; view own offerings' dashboards; certify end-of-term coverage |
-| Substitute Faculty Member | Log coverage only for the specific Session they taught |
+| Substitute / committed swap counterpart (TTM-FR-17) | Log coverage only for the specific Session they taught |
 | Class In-charge | Read-only coverage view for their Section's offerings |
 | HoD | Approve plans and revisions; Department roll-up dashboard; receive lag alerts; countersign certifications |
 | School Dean | School roll-up dashboard; read-only drill-down |
@@ -46,7 +46,7 @@ Syllabus coverage tracking answers "are we teaching what we planned, on schedule
 |---|---|---|
 | Create/edit plan (draft) | Teaching Faculty Member of the offering | Offering assignment from published Timetable |
 | Approve plan / revision | HoD of the owning Department | Department |
-| Log coverage for a Session | Faculty Member who delivered that Session (incl. substitute for their Session) | Session ownership from ATT/TTM |
+| Log coverage for a Session | Faculty Member who delivered that Session (incl. substitute or committed swap counterpart for their Session, per TTM-FR-11/17) | Session ownership from ATT/TTM |
 | Edit own log entry (history kept) | Original logger, until term certification | Session ownership |
 | View offering dashboard | Teaching Faculty Member, Class In-charge (Section), HoD, Dean | Org unit |
 | Configure lag threshold | HoD (Department default), Dean (School default) | Org unit |
@@ -105,7 +105,7 @@ Plan approvals/revisions, log edits, certification, re-opening, and threshold ch
 - SYL-FR-03: Per-Session coverage logging: covered topics, partial marker, revision/test/no-progress markers; linked to the ATT Session; one log per Session; author-only edits with history.
 - SYL-FR-04: Logging for Sessions without attendance capture: log attaches to the Period occurrence, flagged `no-attendance-session`.
 - SYL-FR-05: Logging window management: 24 h and 48 h reminders; late logs accepted and flagged `late`.
-- SYL-FR-06: Substitute logging: the Faculty Member who delivered the Session (per ATT/TTM substitution record) logs it; access limited to that Session.
+- SYL-FR-06: Substitute/swap logging: the Faculty Member who delivered the Session (per the TTM substitution record or committed swap, TTM-FR-17) logs it; access limited to that Session; the log names the actual deliverer; the owning Faculty Member sees it read-only.
 - SYL-FR-07: Combined-class / elective-group support: one offering-level log per Session across the roster context; no duplicate per-Section logs.
 - SYL-FR-08: Coverage computation: % of topics complete vs plan-to-date and vs full plan; partial topics count only when completed.
 - SYL-FR-09: Dashboards: offering view (Faculty Member, Class In-charge), Department roll-up (HoD), School roll-up (Dean), with drill-down and `late`/`no-attendance-session` flag visibility.
@@ -123,6 +123,7 @@ Plan approvals/revisions, log edits, certification, re-opening, and threshold ch
 | Topic spans multiple Sessions | **DECISION:** partial marker on intermediate Sessions; the topic counts toward coverage only when a Session marks it complete. |
 | Plan revision mid-term (topics added/removed) | **DECISION:** versioned revision with HoD re-approval; past logs keep their topic references; coverage % recomputes against the newest approved version; removed topics with existing logs remain visible as "logged, no longer planned". |
 | Substitute teaches the Session | **DECISION:** the substitute logs that Session only; the log names the substitute; the owning Faculty Member sees it read-only in their offering. |
+| Committed swap: counterpart teaches the Session | **DECISION:** identical to the substitute rule — the swapped-in teacher logs that Session only (TTM-FR-17 attribution); the original assignee is denied logging for the swapped occurrence and sees the log read-only. |
 | Combined class: two Section timetables, one delivery | **DECISION:** single offering-level log per Session (business rule 6); dashboards show it once; both Sections' Class In-charges get read access. |
 | Log edited after HoD already acted on a lag alert | **DECISION:** edits keep full history; lag re-evaluates on the next daily run; the alert record is never rewritten. |
 | Blueprint includes an uncovered topic at exam-prep cutoff | **DECISION:** QPG shows a warning listing uncovered topics; Exam Cell may override with reason (audited in QPG). SYL never hard-blocks paper assembly. |
@@ -211,5 +212,6 @@ flowchart TD
 | TC-SYL-016 | Logs carry no student personal data | Legal | P0 | Any saved log | Inspect stored record and dashboard payloads | Only faculty identity, Session ref, topics; no student fields | §5 |
 | TC-SYL-017 | 3-year purge spares referenced certifications | Legal | P2 | Logs older than 3 years; certification in a filing | Run retention job | Old logs purged; referenced certification retained | §5, §9 |
 | TC-SYL-018 | Roll-up performance at scale | NFR | P2 | 100 offerings in Department, 300k logs | Load HoD roll-up | < 3 s (p95) | §9 |
+| TC-SYL-019 | Swap counterpart logs their swapped Session only | Access | P0 | Committed swap gives Dr. Iyer one occurrence of Dr. Rao's offering | 1. Iyer logs that Session 2. Iyer attempts another Session of the offering 3. Rao attempts to log the swapped Session | Step 1 saves, log names Iyer; steps 2 and 3 denied (403, audited); Rao sees Iyer's log read-only | SYL-FR-06, TTM-FR-17, §8 |
 
-Coverage: all §6 acceptance criteria, the §4 authorization matrix (TC-006/007), every §8 decision except mid-term teacher replacement and Timetable-driven Period-count change (both exercised through the TC-001/011 plan flows — add integration TCs during implementation), DPDP minimization and retention (§5 via TC-016/017), and the §9 latency numbers map to at least one test.
+Coverage: all §6 acceptance criteria, the §4 authorization matrix (TC-006/007/019 incl. swap counterparts), every §8 decision except mid-term teacher replacement and Timetable-driven Period-count change (both exercised through the TC-001/011 plan flows — add integration TCs during implementation), DPDP minimization and retention (§5 via TC-016/017), and the §9 latency numbers map to at least one test.

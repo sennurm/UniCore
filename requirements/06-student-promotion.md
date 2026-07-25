@@ -4,7 +4,7 @@ Module code: PRM · Status: DRAFT — pending approval · Last updated: 2026-07-
 
 ## 1. Summary
 
-Promotion moves students from their current semester/year to the next one at term end. Tasq does **not** decide promotions by hardcoded rules — it is a **per-School configurable workflow engine** operating over system-computed eligibility inputs: attendance % (per subject and aggregate, from the ATT module, computed on captured sessions only), results/credits **imported from the external exam system** (Tasq does not conduct exams), and backlog/carry-over (ATKT) counts. Each School configures, per Program, its eligibility criteria, workflow steps, approver chain, and exception paths (attendance condonation, carry-over promotion, detention). A term-end **promotion run** produces a promotion register; approvers work through the configured chain with fully audited override powers; final ratification commits the promotion and feeds onboarding, timetable, and attendance for the new term. Committed promotions are reversible only via a defined, dual-approved rollback flow.
+Promotion moves students from their current semester/year to the next one at term end. UniCore does **not** decide promotions by hardcoded rules — it is a **per-School configurable workflow engine** operating over system-computed eligibility inputs: attendance % (per subject and aggregate, from the ATT module, computed on captured sessions only), results/credits **imported from the external exam system** (UniCore does not conduct exams), and backlog/carry-over (ATKT) counts. Each School configures, per Program, its eligibility criteria, workflow steps, approver chain, and exception paths (attendance condonation, carry-over promotion, detention). A term-end **promotion run** produces a promotion register; approvers work through the configured chain with fully audited override powers; final ratification commits the promotion and feeds onboarding, timetable, and attendance for the new term. Committed promotions are reversible only via a defined, dual-approved rollback flow.
 
 ## 2. Goals & Non-Goals
 
@@ -71,6 +71,7 @@ All checks use the AUTH scope-aware permission API (see 01-authentication-author
 7. **Condonation** requires: a category (medical/other), an uploaded supporting document, and approval by the configured condonation approver. Condoned attendance never rewrites ATT records — it is a PRM-level exception attached to the promotion decision.
 8. **Rollback:** only Dean-initiated + Registrar-approved, only before the new term's attendance capture begins for the affected student, fully audited with reason. Rollback reverts term advancement and re-opens the case at the ratification step. If the rollback re-opens a Section whose term-closure event already fired, the closure is reversed in the same transaction: revoked term-bound grants are restored (AUTH-FR-14) and the Section's archived timetable is un-archived (TTM-FR-15).
 9. **Workflow configuration is versioned;** a run binds to the configuration version active at run start and keeps it for the run's lifetime (mid-run config changes affect only future runs).
+10. **Attendance freeze (locked 24-07-2026):** triggering a Program's promotion run publishes an **attendance-freeze event** for all of that Program's Sections' current-term Sessions (guaranteed delivery, outbox pattern). ATT enforces it (ATT-FR-11/12). Exemptions: (a) a correction attached to an open dispute/grievance commits for **non-ratified** students and recomputes the case per PRM-FR-12; (b) retro `counts-as-present` leave marking (ATT-FR-17) stays exempt until the student ratifies — after ratification the marking is skipped and surfaces here as post-ratification evidence (rollback/override only); (c) never-opened Periods resolve post-freeze by HoD-acknowledged write-off only. A run abandoned/discarded before any ratification lifts the freeze (audited).
 
 ### Audit
 
@@ -91,7 +92,7 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 - Given a Program in another School, when I attempt to configure it, then I get 403 and the attempt is audited.
 
 **US-PRM-2** — As Admin/office staff, I trigger the term-end run for a Program so that the promotion register is generated.
-- Given results are imported and the term is closed for attendance, when I trigger the run, then every enrolled student is computed and placed in exactly one of the three lists with their input values shown.
+- Given results are imported, when I trigger the run, then the attendance freeze fires for the Program (PRM-FR-17) and every enrolled student is computed and placed in exactly one of the three lists with their input values shown.
 - Given results are missing for some students, when I trigger the run, then those students are held in a `blocked-awaiting-results` state and the run proceeds for the rest (partial run).
 
 **US-PRM-3** — As an HoD, I work through my approval step so that borderline cases get human judgment.
@@ -127,6 +128,7 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 - PRM-FR-14: Final-term handling: students completing their last semester/year are routed to a graduation/exit list, not a promotion list; exit list is exported for the university's degree process (out of scope beyond the export).
 - PRM-FR-15: Approver-change continuity: when a chain role's holder changes (grant expiry/transfer), the successor inherits all pending approvals at that step with case history intact.
 - PRM-FR-16: Student-facing outcome view: own status, failing criteria if adverse, exception applied, and grievance route; nothing about other students.
+- PRM-FR-17: **Attendance freeze:** run trigger publishes the freeze event per business rule 10, scoped to the Program's Sections' current-term Sessions; consumed by ATT (correction window), LVE/ATT (retro-marking exemption boundary), and AUTH (edge-case reasoning). Freeze state is queryable per Program/term; lifting (run discard before any ratification) is Dean-approved and audited.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -135,7 +137,8 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 | Results arrive late from the exam system for some students | **DECISION:** run is blocked only for the affected students (`blocked-awaiting-results`); a partial run proceeds for the rest; blocked students are computed and merged into the same run on import. |
 | Student has a pending grievance on attendance | **DECISION:** excluded from the run and visibly flagged until the grievance resolves; on resolution the student is computed and merged. Never promoted/detained on contested data. |
 | Approver leaves / role changes mid-workflow | **DECISION:** successor to the role grant inherits all pending approvals at that step (PRM-FR-15); the handover itself is audited. No case is orphaned. |
-| Data correction after the run but before ratification | **DECISION:** recompute non-ratified cases only (PRM-FR-12); a recompute that changes list assignment resets that case to the first chain step with a visible "recomputed" marker. |
+| Data correction after the run but before ratification | **DECISION:** possible only via the dispute/grievance exemption of the freeze (business rule 10) or a results re-import; recompute non-ratified cases only (PRM-FR-12); a recompute that changes list assignment resets that case to the first chain step with a visible "recomputed" marker. |
+| Routine (non-dispute) correction attempted after the run was triggered | **DECISION:** blocked by the attendance freeze (PRM-FR-17); ATT rejects it pointing to the dispute flow. The freeze is what keeps run snapshots and the register stable while approvers work. |
 | Data correction discovered after ratification | **DECISION:** no silent recompute; the only paths are the rollback flow (if in window) or a next-term override — both audited. |
 | Graduating final-term students | **DECISION:** exit path, not promotion — routed to the graduation/exit list (PRM-FR-14); never advanced to a non-existent term. |
 | Student transfers mid-year (Program/campus) | **DECISION:** transferred-out students are excluded from the source run with status `transferred`; transferred-in students enter the destination Program's run with their imported attendance/results attached; unmappable inputs put them in the exceptions list for manual decision. |
@@ -144,7 +147,7 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 | Run triggered twice concurrently for one Program | **DECISION:** one active run per Program per term enforced by lock; the second trigger is rejected with a pointer to the active run. |
 | A few students stay `blocked-awaiting-results` while the rest of the Section ratifies | **DECISION:** the term-closure event waits — it fires only when **every** student of the cohort reaches a final state, so the Class In-charge and timetable stay active for the stragglers. If blocking drags past the configured term-archival date, the AUTH backstop revokes anyway and the remaining cases are handled via the exception flow with HoD acting where the In-charge role has lapsed. |
 | No Sessions captured at all for a subject (denominator zero) | **DECISION:** subject excluded from the attendance computation with a warning on the register (computed on captured sessions only, per ATT); an all-subjects-zero student lands in exceptions for manual decision. |
-| Rollback requested after new-term attendance capture began | **DECISION:** refused (hard rule); remediation moves to manual academic-administration process outside Tasq, recorded as an audited note on the case. |
+| Rollback requested after new-term attendance capture began | **DECISION:** refused (hard rule); remediation moves to manual academic-administration process outside UniCore, recorded as an audited note on the case. |
 | Worst case: wrong criteria configured, discovered after ratification of a whole Program | **DECISION:** mass rollback uses the same Dean+Registrar flow applied per run (batch), still bounded by the attendance-capture window; students already past the window are handled case-by-case via next-term overrides. Configuration changes require a second Dean confirmation on save to reduce recurrence. |
 
 ## 9. Non-Functional Requirements
@@ -167,7 +170,7 @@ Every run trigger, computation snapshot, list assignment, approval, rejection, o
 
 ## 11. Open Questions
 
-- Should fee clearance (tracked outside Tasq) gate ratification via an imported flag, or stay fully out of scope? Proposed: fully out of scope for MVP.
+- Should fee clearance (tracked outside UniCore) gate ratification via an imported flag, or stay fully out of scope? Proposed: fully out of scope for MVP.
 - Do any Schools require a Faculty-Division-level ratification step above the Dean (e.g., for professional-body-accredited Programs)? The chain engine supports it; needs confirmation per School.
 - Retention beyond 7 years: does university statute mandate permanent retention of promotion registers? Proposed: permanent for the final outcome record, 7 years for working artifacts.
 
@@ -236,5 +239,6 @@ flowchart TD
 | TC-PRM-020 | Mid-batch commit failure leaves no partial student | NFR | P1 | Ratification batch; induced failure at student k | Ratify; inspect states | Students < k committed, ≥ k uncommitted; batch resumable; no half-advanced student | §9, PRM-FR-10 |
 | TC-PRM-021 | Term-closure fires only when whole cohort is final | Boundary | P0 | 59 of 60 students ratified; 1 blocked-awaiting-results | 1. Inspect Section state 2. Resolve and ratify the last student | No closure event at step 1 (In-charge + timetable still active); event fires at step 2; AUTH revokes, TTM archives | PRM-FR-10a, §8 |
 | TC-PRM-022 | In-window rollback reverses term closure | Happy | P1 | Closure fired; rollback approved before new-term capture | Rollback commits | Grants restored, timetable un-archived, case at ratification — one atomic transition, fully audited | PRM-FR-10a/13 |
+| TC-PRM-023 | Run trigger fires the attendance freeze | Happy | P0 | Program with 3 Sections; no freeze active | Trigger the run; Class In-charge attempts a routine ATT correction; then a dispute-driven correction on a non-ratified student | Freeze event published for all 3 Sections; routine correction rejected by ATT; dispute-driven correction commits and the case recomputes with the "recomputed" marker | PRM-FR-17, business rule 10, ATT-FR-11 |
 
-Coverage: every §6 acceptance criterion, the §4 authorization matrix (TC-012/013), all §8 decisions except the mass-rollback worst case (exercised operationally via TC-014's flow in batch mode — add an integration TC during implementation), DPDP/retention obligations (§5 via TC-008/018), the term-closure lifecycle (TC-021/022), and the §9 compute/atomicity numbers map to at least one test.
+Coverage: every §6 acceptance criterion, the §4 authorization matrix (TC-012/013), all §8 decisions except the mass-rollback worst case (exercised operationally via TC-014's flow in batch mode — add an integration TC during implementation), DPDP/retention obligations (§5 via TC-008/018), the term-closure lifecycle (TC-021/022), the attendance-freeze lifecycle (TC-023 with TC-ATT-022/023), and the §9 compute/atomicity numbers map to at least one test.

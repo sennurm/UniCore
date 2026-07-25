@@ -9,7 +9,8 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 ## 2. Goals & Non-Goals
 
 **Goals**
-- Term setup and per-campus/per-School period-grid definitions (Schools may have different period structures).
+- Term setup: per-School academic calendars (uploaded by School office staff, Dean-approved, versioned — start/end dates, exam-date ranges, special-event dates, term-archival backstop date), campus holiday calendars (System Admin), and per-campus/per-School period-grid definitions (Schools may have different period structures).
+- **Section-instance creation:** the Timetable Cell creates each term's Section instances during term setup — Sections are per-term entities (Program × term × label); ONB allotment and draft authoring depend on them existing.
 - Manual timetable construction per Section per term by the Timetable Cell, with save-time clash detection (hard blocks, not warnings).
 - Lab blocks with student batches; elective slots with elective groups; combined classes.
 - Draft vs published states with an HoD → Timetable Cell approval flow before publish.
@@ -36,7 +37,9 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 | Department admin staff | Elective-group creation and student-to-group assignment within their Department, within capacity |
 | Faculty Members | Read own published timetable (all versions); notified on changes and substitute assignments |
 | Students | Read own published timetable (Section + batch + elective view merged); notified on changes |
-| System Admin | Venue master data, campus calendars, term dates configuration |
+| System Admin | Venue master data, campus holiday calendars |
+| School office staff (Admin/office staff of a School) | Upload the School's per-term academic calendar (start/end, exam dates, special events) for Dean approval |
+| School Dean | Approve the School academic calendar and its amendments (recorded, versioned) |
 | Executives (Principal/Dean) | Read-only dashboards of published timetables in their scope |
 
 **Denied:** faculty and students never see drafts. Nobody outside the Timetable Cell (plus System Admin for master data) can mutate a timetable; HoDs approve and request, they do not edit slots directly.
@@ -47,7 +50,10 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 
 | Action | Allowed | Enforced at |
 |---|---|---|
-| Define term dates, campus calendar, venue master | System Admin (campus scope) | API + service layer |
+| Define campus holiday calendar, venue master | System Admin (campus scope) | API + service layer |
+| Upload School academic calendar (term dates, exam dates, special events, archival backstop) | School office staff (own School); becomes active only on Dean approval | API + service layer |
+| Approve School academic calendar / amendment | School Dean (own School); approval recorded, versions kept | API (workflow) |
+| Create Section instances for a term | Timetable Cell (own campus), per Program per term; deactivate-only once students are allotted or a timetable is published | API + service layer |
 | Define period grid per School | Timetable Cell (own campus), after School sign-off recorded | API + service layer |
 | Create/edit draft timetable | Timetable Cell (own campus) | API + service layer |
 | Approve/reject draft | HoD for their Department's portion; publish requires all covered HoDs approved | API (workflow engine) |
@@ -112,7 +118,7 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 
 ## 7. Functional Requirements
 
-- TTM-FR-01: Term setup per campus: term dates, holidays, working-day pattern from the campus calendar.
+- TTM-FR-01: Term setup: campus holiday/working-day calendar (System Admin, per campus) + **School academic calendar** per term per TTM-FR-18; term dates are per School, not per campus (one campus hosts semester- and year-based Schools simultaneously).
 - TTM-FR-02: Period-grid definition per campus/School: named Periods with start/end times; different Schools may run different grids; grid changes mid-term require versioned republish of affected timetables.
 - TTM-FR-03: Draft timetable authoring per Section per term: assign course, Faculty Member, venue to each Period.
 - TTM-FR-04: Save-time hard clash detection across Faculty Member, venue, and student obligations (Section/batch/elective-group union, membership-as-of-date), spanning Schools and grids by absolute time overlap — not by Period index.
@@ -129,6 +135,8 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 - TTM-FR-15: Term-bound archival: on the PRM term-closure event for a Section's cohort, archive that Section's timetable — reject Session opens (ATT) and new substitutions/swaps against it, keep read access for history/audit; un-archive on PRM rollback within the rollback window.
 - TTM-FR-16: Rebalancing suggestions per §4 rule 9a: triggered by LVE leave approval and same-day absence; ranked clash-free candidates (subject familiarity, Department, lowest load); HoD confirmation creates a substitution; urgent flag for same-day; suggestion, confirmation, and rejection all audited.
 - TTM-FR-17: Class swaps per §4 rule 9b: propose → both-ways clash check → accept (re-check) → immediate commit; occurrence-level only; one-hop (no re-swap); HoD notification; cancellation before first swapped occurrence; session-open rights and ATT/SYL attribution follow the swap.
+- TTM-FR-18: **School academic calendar:** per School per term — start/end dates, exam-date ranges, special-event dates, and the term-archival backstop date (consumed by AUTH-FR-13). Uploaded by School office staff, active only on recorded Dean approval; amendments create a new version requiring re-approval; all versions retained and audited. Consumers: TTM scheduling warnings (below), TSK exam-duty conflict signal (TSK-FR-17), LVE On-Duty overlap display, AUTH archival backstop. Exam/special-event dates are **soft signals** in MVP: placing a regular Period inside an exam-date range raises a warning requiring recorded Timetable Cell acknowledgment — never a hard block.
+- TTM-FR-19: **Section-instance creation:** during term setup the Timetable Cell creates the term's Section instances per Program (label reusable across terms; each instance a distinct org unit for scoping, singleton Class In-charge, and term-closure). Instances with allotted students or a published timetable cannot be deleted — deactivate only. ONB allotment (ONB-FR-07) and draft authoring (TTM-FR-03) reject Sections with no instance for the target term.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -154,6 +162,8 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 | Worst case: accidental publish of a wrong draft | No unpublish (faculty/students may have seen it). Remedy: immediate republish of the corrected version effective next day + notifications. Same-day damage handled via substitutions/cancellations. Audit trail shows both versions. |
 | Faculty Member tries to open a Session from last term's timetable after their Section's cohort was promoted | Rejected — the timetable is archived per business rule 10/TTM-FR-15; the error names the archival cause. The same Faculty Member teaching the same subject next term acts only under the new term's published timetable. |
 | Schools promote on different dates (semester Schools ratify while year Schools are mid-term) | Archival is per Section-cohort, driven by each School's own PRM ratification — never a campus-wide cutoff. Mixed-state campuses are the normal case, not an exception. |
+| Regular Period scheduled inside a declared exam-date range | Soft warning naming the exam range; Timetable Cell acknowledges to proceed (recorded, audited). Never a hard block — other cohorts legitimately hold classes during a School's exam window. |
+| School academic calendar amended mid-term (exam dates move) | New calendar version requires Dean re-approval; existing acknowledgments stay attached to the version they were made against; new/edited Periods validate against the newest approved version. |
 
 ## 9. Non-Functional Requirements
 
@@ -168,7 +178,7 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 
 - Venue master data (rooms, labs, capacities, campus) is maintainable by System Admin before timetable authoring starts; venues belong to exactly one campus.
 - Course/subject catalog (what is taught in which Program term) arrives from ERP or academic setup outside this module; TTM references courses, does not define them.
-- Section, batch, and elective-group membership is served by the ONB membership-as-of-date API (ONB-FR-10); TTM does not own student membership except elective-group assignment.
+- Section, batch, and elective-group membership is served by the ONB membership-as-of-date API (ONB-FR-10); TTM owns Section-*instance* creation (TTM-FR-19) but not student membership, except elective-group assignment.
 - One Timetable Cell per campus; cross-campus teaching (one Faculty Member at two campuses) is rare but real — clash checks therefore run on the Faculty Member globally, not per campus.
 - Substitution semantics for attendance (session-open rights) are specified in 04-attendance-capture.md; TTM only records the assignment.
 
@@ -235,7 +245,10 @@ flowchart TD
 | TC-TTM-024 | Class swap: propose, accept, teach, cancel path | Happy | P0 | A and B assigned clash-free swappable occurrences | A proposes; B accepts; B opens A's Session on swap date; A cancels a future occurrence pair | Swap commits on acceptance; HoDs notified; session-open rights follow; cancellation before first occurrence reverts with notifications; all audited | TTM-FR-17, §4 rule 9b |
 | TC-TTM-025 | Swap clash re-check at acceptance | Concurrency | P0 | Clash created between proposal and acceptance (substitution landed) | B accepts | Acceptance rejected with stale-state error naming the conflict; no partial swap | TTM-FR-17, §8 |
 | TC-TTM-026 | Swapped-in occurrence cannot be re-swapped | Negative | P1 | Committed swap gives B occurrence X | B proposes swapping X onward to C | Rejected: one-hop rule; HoD substitution over X still possible | §4 rule 9b |
+| TC-TTM-027 | School calendar upload, approval, amendment versioning | Happy | P0 | School office staff account; Dean available | 1. Upload term calendar (dates, exam ranges, events) 2. Dean approves 3. Amend exam range; Dean re-approves | Calendar active only after approval; amendment creates v2 requiring re-approval; all versions retained and audited | TTM-FR-18 |
+| TC-TTM-028 | Period on an exam date raises soft warning | Boundary | P1 | Approved calendar with exam range 10-12-2026→20-12-2026 | Place a regular Period on 15-12-2026 | Warning names the exam range; save proceeds only after recorded acknowledgment; never blocks | TTM-FR-18, §8 |
+| TC-TTM-029 | Draft authoring blocked without Section instance | Negative | P0 | New term; no Section instances created yet | Attempt to author a draft for "3B" | Rejected with `section-not-created`; after Timetable Cell creates the instance, authoring proceeds | TTM-FR-19 |
 
-Coverage addition: rebalancing triggers/ranking/empty-list (TC-021/022/023) and the swap lifecycle incl. concurrency and one-hop (TC-024/025/026) map to TTM-FR-16/17.
+Coverage addition: rebalancing triggers/ranking/empty-list (TC-021/022/023), the swap lifecycle incl. concurrency and one-hop (TC-024/025/026) map to TTM-FR-16/17; School calendar lifecycle and exam-date warnings (TC-027/028) map to TTM-FR-18; Section-instance dependency (TC-029, with TC-ONB-007/008) maps to TTM-FR-19.
 
 Coverage: every §6 acceptance criterion, the §4 authorization matrix (TC-012/015 plus scoped-authoring checks folded into TC-001), UGC traceability (TC-017), term-bound archival (TC-019/020), and all §8 decisions map to at least one test except venue-deactivation and faculty-departure conflict-queue flows, which are covered in the integration test phase.

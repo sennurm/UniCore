@@ -17,7 +17,7 @@ Leave Management lets every member of the university — students and staff — 
 - Pro-Chancellor and Chancellor as first-class system roles topping the reporting chain.
 
 **Non-Goals**
-- Full leave accounting (accrual, carry-forward, encashment, loss-of-pay computation) — external HR/payroll owns it; Tasq exports approved-leave data.
+- Full leave accounting (accrual, carry-forward, encashment, loss-of-pay computation) — external HR/payroll owns it; UniCore exports approved-leave data.
 - Multi-step approval chains — leave is a single-approver decision (the routing picks *which* single approver).
 - Per-application manual forwarding — locked out; only auto-cascade and standing delegation move an application away from the designated approver.
 - Attendance capture mechanics — ATT owns them; LVE only supplies the approved-leave facts and per-type impact policy.
@@ -33,7 +33,7 @@ Leave Management lets every member of the university — students and staff — 
 | Dean | Approve/reject HoD applications in their School (+ delegated faculty applications); standing delegation to VC/Registrar; School leave calendar |
 | VC / Registrar | Approve/reject Dean applications (+ delegated HoD applications); their own applications route to Pro-Chancellor/Chancellor |
 | Pro-Chancellor / Chancellor | **New roles.** Approve/reject VC and Registrar applications; Chancellor is the terminal approver. Minimal-capability accounts under standard AUTH rules |
-| Admin/office staff & non-teaching support | Applicant rights; approver = their unit head (see Open Questions for the confirmed mapping) |
+| Admin/office staff & non-teaching support | Applicant rights; approver = their unit head per the AUTH role-registry unit-head map (locked 24-07-2026) |
 | System Admin / HR designate | Configure leave-type catalog, quotas, retro window; manage the HR export; no approval powers |
 
 **Denied:** applicants never see others' applications or balances. Approvers see only applications routed to them (plus their scope's leave calendar). Medical documents are visible only to the approver(s) in the application's actual routing path.
@@ -55,15 +55,15 @@ Leave Management lets every member of the university — students and staff — 
 
 ### Business rules
 
-1. **Routing map (locked):** Student → Class In-charge of their Section; Faculty Member → HoD of their Department; HoD → Dean of their School; Dean → VC; VC and Registrar → Pro-Chancellor, or Chancellor if the Pro-Chancellor is unavailable; Pro-Chancellor → Chancellor. The Chancellor is terminal — no cascade above. (Principals/Directors: see Open Questions; proposed → VC.)
+1. **Routing map (locked):** Student → Class In-charge of their Section; Faculty Member → HoD of their Department; HoD → Dean of their School; Dean → VC; **Principal/Director → VC**; VC and Registrar → Pro-Chancellor, or Chancellor if the Pro-Chancellor is unavailable; Pro-Chancellor → Chancellor. Admin/office staff and non-teaching support → their **unit head** per the AUTH role-registry unit-head map (e.g., Exam Cell staff → Registrar; Department office staff → HoD). The Chancellor is terminal — no cascade above.
 2. **Reporting chain is AUTH-owned:** LVE resolves approvers via the AUTH reporting-chain configuration (AUTH-FR-18) — role-level, university-configurable, also used by TSK escalation. LVE never hardcodes names.
-3. **Auto-cascade:** at routing time (application submit AND whenever the queue is re-evaluated), if the resolved approver has *approved* leave overlapping today-through-decision, the application routes to their reporting person, recursively. The routing path (every hop and why) is recorded on the application. Cascade uses approved leave only — a pending application never diverts someone's queue.
+3. **Auto-cascade (extended 24-07-2026):** at routing time (application submit AND whenever the queue is re-evaluated), if the resolved approver level is skippable, the application routes to their reporting person, recursively. A level is skippable when (a) the holder has *approved* leave overlapping today-through-decision (`on-leave`), or (b) the role has **no active holder** (`vacant-role` — e.g., the window between term-closure revoking a Class In-charge and the new term's designation). If the applicant has **no Section at all** (promoted, pre-allotment), resolution starts at the HoD of the Department owning their Program (`no-section`). Every hop and its cause is recorded on the application. Cascade uses approved leave only — a pending application never diverts someone's queue. **Vacancy alert:** when applications cascade past the same vacant role for more than 5 working days (University-configurable), the role's designating authority (per AUTH) and System Admin are alerted.
 4. **Standing delegation:** an approver may open a delegation window (start/end date) routing their entire queue to their reporting person; overlapping windows are rejected; the window and every application routed under it are audited. Delegation does not transfer any other power — only the leave-approval queue.
 5. **One active approver:** at any instant an application has exactly one resolvable approver; approval/rejection by anyone else (including the originally designated approver while a delegation window is active) is refused.
 6. **Leave-type catalog:** each type carries: applicable group (student/staff/both), max consecutive days, annual quota (staff; optional for students), document requirement (e.g., medical certificate mandatory when > 2 days), half-day allowed (staff only), retro allowed (yes/no), and — for student types — the **School-configurable attendance impact**: `counts-as-present` (e.g., On-Duty: sports, NCC, university events), `absent` (casual), or `condonation-evidence` (medical: attendance unaffected, but the approved leave is attached as evidence to any later PRM condonation request).
-7. **Balances (staff):** quota per type per year (IST calendar or academic year, configured); decremented on approval by working days consumed (campus calendar — holidays inside the range don't count); restored on cancellation for unused days; an application exceeding the balance is **flagged `exceeds-balance`, not blocked** — the approver decides with the flag visible, and the excess appears in the HR export (loss-of-pay is HR's business).
+7. **Balances (staff):** quota per type per year (IST calendar or academic year, configured); decremented on approval by working days consumed (campus calendar — holidays inside the range don't count); **half-days decrement 0.5** — balances are tracked in half-day precision, a half-day on a holiday consumes nothing, and the HR export carries the 0.5 granularity; restored on cancellation for unused days; an application exceeding the balance is **flagged `exceeds-balance`, not blocked** — the approver decides with the flag visible, and the excess appears in the HR export (loss-of-pay is HR's business).
 8. **Dates:** range with optional half-day start/end (staff); reason mandatory; overlapping with an existing pending/approved application of the same person is rejected. **Retro applications** (start date in the past) allowed only for retro-enabled types, within 3 working days (University-configurable), with justification.
-9. **Attendance interplay (students):** approved leave of a `counts-as-present` type marks the covered Sessions per ATT-FR-17 automatically — no Class In-charge correction needed; `absent` and `condonation-evidence` types never alter ATT records. A retro approval after Sessions were captured triggers the same automatic marking for covered Sessions, audited with the leave reference.
+9. **Attendance interplay (students):** approved leave of a `counts-as-present` type marks the covered Sessions per ATT-FR-17 automatically — no Class In-charge correction needed; `absent` and `condonation-evidence` types never alter ATT records. A retro approval after Sessions were captured triggers the same automatic marking for covered Sessions, audited with the leave reference. **Freeze boundary (PRM-FR-17):** the automatic marking stays exempt from the attendance freeze until the student ratifies; for a ratified student the approval still commits but marking is skipped and flagged to PRM as post-ratification evidence.
 10. **Faculty leave → rebalancing:** approval of a Faculty Member's leave triggers the TTM rebalancing flow (TTM-FR-16): ranked, clash-free substitute suggestions per affected Period occurrence delivered to their HoD, who confirms or acts manually. LVE never assigns substitutes itself, and nothing is auto-assigned.
 11. **TSK flag:** approved leave sets the on-leave flag for the leave dates — consumed by TSK (rotation skip, reassignment flagging) and by this module's own auto-cascade.
 12. **Rejection requires a reason;** approval may carry an optional note. Both notify the applicant. A rejected application is terminal — re-apply, never resubmit.
@@ -76,7 +76,7 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 
 - **DPDP — sensitive data:** medical certificates are health data: encrypted at rest, ACL-restricted to the actual routing path (§4), access-logged, and retained only as long as the leave record requires (proposed 3 years for leave documents vs 7+ for the decision record; see Open Questions). Leave *reasons* are visible only to the routing path; leave *calendars* show names and dates, never reasons or documents.
 - **DPDP — purpose limitation:** leave data is used for leave decisions, attendance impact, substitution prompting, and the HR export — nothing else; balances and leave history are not exposed for general profiling.
-- **DPDP — minors:** a minor student's leave application and its documents follow the same parental-consent footing as their other personal data (AUTH §5).
+- **DPDP — minors:** not applicable — all students are 18+ at admission (locked 24-07-2026, 00-overview.md §7).
 - **UGC/AICTE:** the `counts-as-present` policy for On-Duty leave must be defensible per School academic regulations — the per-School configuration and its audit trail provide the evidence; PRM explainability (which leave affected which percentage) must be reconstructible.
 - Localization: IST, DD-MM-YYYY, working days from the campus calendar.
 
@@ -106,14 +106,14 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 
 - LVE-FR-01: Leave application: type, date range (half-day option for staff), mandatory reason, document upload (required per type rules), overlap check against own pending/approved leave.
 - LVE-FR-02: Routing resolution per the locked map (§4 rule 1) via the AUTH reporting chain (AUTH-FR-18); exactly one active approver; full routing path recorded.
-- LVE-FR-03: Auto-cascade past approvers with overlapping approved leave, recursive to the Chancellor; Chancellor-unavailable applications stay pending with an alert to System Admin (no cascade above terminal).
+- LVE-FR-03: Auto-cascade past skippable levels — overlapping approved leave (`on-leave`) or no active holder (`vacant-role`) — recursive to the Chancellor; Section-less applicants resolve from their Department's HoD (`no-section`); every hop recorded with its cause; Chancellor-unavailable applications stay pending with an alert to System Admin (no cascade above terminal); chronic-vacancy alert after 5 working days (configurable) to the designating authority + System Admin.
 - LVE-FR-04: Standing delegation windows: approver → own reporting person only, dated, non-overlapping, audited; queue reroutes for the window and reverts automatically.
 - LVE-FR-05: Leave-type catalog management (University level) + per-School student attendance-impact policy (`counts-as-present` / `absent` / `condonation-evidence`) set by the School Dean.
-- LVE-FR-06: Staff balances: per-type annual quota; working-day decrement on approval (campus calendar); restore on cancellation; `exceeds-balance` flagging (never blocking); balance visible to the owner and their approver.
+- LVE-FR-06: Staff balances: per-type annual quota; working-day decrement on approval (campus calendar) with half-day precision (0.5 per half-day, business rule 7); restore on cancellation; `exceeds-balance` flagging (never blocking); balance visible to the owner and their approver; HR export in half-day granularity.
 - LVE-FR-07: Decision flow: approve (optional note) / reject (mandatory reason); terminal states; applicant notified; re-apply instead of resubmit.
 - LVE-FR-08: Cancellation: pending — free; approved — before/during leave with unused working days restored; cancellations audited and notify the approver.
 - LVE-FR-09: Retro applications for retro-enabled types within the configured window (default 3 working days), justification mandatory.
-- LVE-FR-10: ATT integration: automatic Session marking for `counts-as-present` types (including retro), audited with leave reference (see ATT-FR-17); no ATT effect for other types.
+- LVE-FR-10: ATT integration: automatic Session marking for `counts-as-present` types (including retro), audited with leave reference (see ATT-FR-17); no ATT effect for other types; marking exempt from the attendance freeze until the student ratifies, skipped-and-flagged after (business rule 9, PRM-FR-17).
 - LVE-FR-11: TTM integration: faculty leave approval triggers rebalancing suggestions (TTM-FR-16) — ranked substitute candidates per affected Period to the HoD for confirmation.
 - LVE-FR-12: TSK integration: approved leave sets the on-leave flag for the dates (consumed by TSK and by LVE cascade).
 - LVE-FR-13: PRM integration: approved `condonation-evidence` leave auto-attaches to any condonation request for the overlapping term (PRM-FR-07).
@@ -135,7 +135,10 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 | Medical certificate required but type also retro-enabled, applicant hospitalized | **DECISION:** retro window (default 3 working days) is counted from return-to-duty date for medical types, not leave start — configurable per type. |
 | Student transfers Section mid-application | **DECISION:** undecided applications re-route to the new Section's Class In-charge on the next routing evaluation; the hop is recorded. |
 | Class In-charge role superseded mid-application | **DECISION:** queue follows the role, not the person (AUTH grant supersede) — the new In-charge inherits the queue; cascade state recalculates. |
-| Exceeds-balance approved, then HR disputes | **DECISION:** Tasq's record is the approval with the visible flag; the monetary consequence (LOP) is HR's; Tasq never retro-edits the decision. |
+| Approver role vacant (e.g., term-closure revoked the In-charge, new one not yet designated) | **DECISION:** cascade past the vacancy to the next chain level, hop recorded as `vacant-role`; when the role is filled, undecided items re-route back on the next routing evaluation; chronic vacancy (> 5 working days, configurable) alerts the designating authority + System Admin. |
+| Applicant has no Section (promoted, awaiting re-allotment) | **DECISION:** routing starts at the HoD of the Department owning the applicant's Program, hop recorded as `no-section`; on allotment, undecided items re-route to the new Section's In-charge. |
+| Retro counts-as-present approval lands for an already-ratified student | **DECISION:** the approval commits (leave record valid) but ATT marking is skipped and flagged to PRM as post-ratification evidence (business rule 9); the applicant is told the attendance effect requires the PRM rollback/override path. |
+| Exceeds-balance approved, then HR disputes | **DECISION:** UniCore's record is the approval with the visible flag; the monetary consequence (LOP) is HR's; UniCore never retro-edits the decision. |
 | Worst case: routing bug grants someone else's queue | **DECISION:** every decision re-validates routing server-side at commit (defense in depth per §4 rule 5); a decision by a non-resolved approver is refused and alerts IT — fail closed. |
 | Worst case: mass casual-leave submissions before an exam (coordinated) | **DECISION:** no auto-approval exists anywhere; approvers see a same-period spike indicator on their queue; academic response is human, not system policy. |
 
@@ -150,7 +153,7 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 
 ## 10. Assumptions
 
-- The reporting chain (AUTH-FR-18) is configured before LVE go-live: Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor, with Registrar → Pro-Chancellor.
+- The reporting chain (AUTH-FR-18) is configured before LVE go-live: Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor, with Registrar → Pro-Chancellor, Principal/Director → VC, and the unit-head map for non-academic staff.
 - Pro-Chancellor and Chancellor accounts follow standard AUTH provisioning (password + OTP); their minimal capability set is leave approval unless explicitly extended.
 - Staff joining mid-year get pro-rated quotas from the HR feed, or full quota if HR provides none (flagged in the export).
 - The campus calendar (TTM) is the single working-day source for balance arithmetic and retro windows.
@@ -158,8 +161,8 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 
 ## 11. Open Questions
 
-- **Principals/Directors routing:** proposed Principal/Director → VC (they weren't in the stated map); confirm.
-- **Admin/office staff and non-teaching support routing:** proposed → their unit head (e.g., Exam Cell staff → Registrar; Department office staff → HoD); needs the confirmed unit-head map.
+- ~~Principals/Directors routing~~ — **resolved 24-07-2026:** Principal/Director → VC (business rule 1, AUTH-FR-18).
+- ~~Admin/office staff and non-teaching support routing~~ — **resolved 24-07-2026:** unit head per the AUTH role-registry unit-head map.
 - Medical-document retention: proposed 3 years for documents, 7+ years for the decision record; needs registrar/legal confirmation.
 - Should students see a leave-days-taken counter (transparency) even where no quota is set? Proposed: yes.
 
@@ -170,8 +173,8 @@ flowchart TD
   A[Applicant submits: type · dates · reason · document per type rules] --> B{Valid? overlap · retro window · document · max days}
   B -- No --> B1[Refused with named rule]
   B -- Yes --> C[Resolve approver from reporting chain]
-  C --> D{Approver on approved leave overlapping?}
-  D -- Yes --> D1[Cascade to approver's reporting person · hop recorded]
+  C --> D{Approver level skippable? on approved leave OR role vacant}
+  D -- Yes --> D1[Cascade to next reporting level · hop + cause recorded]
   D1 --> D
   D -- No --> E{Standing delegation window active?}
   E -- Yes --> E1[Route to delegation target · recorded]
@@ -217,5 +220,10 @@ flowchart TD
 | TC-LVE-018 | Absent-type leave never touches ATT | Negative | P0 | Casual = absent policy | Approve casual leave over captured Sessions | ATT records unchanged; no marking events | LVE-FR-10, §4 rule 9 |
 | TC-LVE-019 | Chancellor/Pro-Chancellor singleton enforced | Access | P1 | Active Chancellor grant exists | Grant chancellor to second user | Rejected per singleton rule; supersede flow required | LVE-FR-16, AUTH-FR-16 |
 | TC-LVE-020 | Routing follows role supersede | Access | P1 | In-charge superseded; 4 applications pending | New In-charge opens queue | All 4 pending items visible with history; old holder refused | §8 |
+| TC-LVE-021 | Vacancy cascade: student leave during In-charge gap | Happy | P0 | Section's In-charge grant revoked by term-closure; no new designation | Student applies for leave | Application routes to the HoD with hop cause `vacant-role`; when a new In-charge is designated, undecided items re-route back | LVE-FR-03, §8 |
+| TC-LVE-022 | Section-less promoted student routes to HoD | Happy | P0 | Student ratified, awaiting re-allotment (no Section) | Student applies for leave | Routes to the Department's HoD with cause `no-section`; on allotment, undecided items re-route to the new In-charge | LVE-FR-03, §8 |
+| TC-LVE-023 | Chronic vacancy alert after 5 working days | Boundary | P1 | Applications cascading past a vacant In-charge role for 6 working days | Daily routing evaluation runs | Alert sent to the HoD (designating authority) + System Admin exactly once per configured window | LVE-FR-03 |
+| TC-LVE-024 | Half-day decrements 0.5 | Boundary | P1 | Staff balance 10; half-day allowed type | Apply half-day Friday PM → approve; then cancel | Balance 9.5 after approval; restored to 10 on cancellation; HR export shows 0.5 granularity | LVE-FR-06, §4 rule 7 |
+| TC-LVE-025 | Retro marking skipped for ratified student | Boundary | P0 | Student ratified; retro OD (counts-as-present) approved covering captured Sessions | Approval commits | Leave record valid; no ATT marking; flag raised to PRM as post-ratification evidence; applicant informed | LVE-FR-10, §8, PRM-FR-17 |
 
-Coverage: every §6 acceptance criterion, the full routing map incl. cascade and terminal behavior (TC-005/006), delegation (TC-007/008/009/014), all balance rules (TC-003/004/015), every ATT/TTM/TSK/PRM integration point (TC-001/003/010/018), DPDP medical-document controls (TC-016/017), and all §8 decisions except mass-submission spike indication (dashboard concern — add UI test during implementation) map to at least one test.
+Coverage: every §6 acceptance criterion, the full routing map incl. cascade, vacancy/no-section handling, and terminal behavior (TC-005/006/021/022/023), delegation (TC-007/008/009/014), all balance rules incl. half-days (TC-003/004/015/024), every ATT/TTM/TSK/PRM integration point incl. the freeze boundary (TC-001/003/010/018/025), DPDP medical-document controls (TC-016/017), and all §8 decisions except mass-submission spike indication (dashboard concern — add UI test during implementation) map to at least one test.

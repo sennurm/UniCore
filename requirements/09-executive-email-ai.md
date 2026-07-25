@@ -19,7 +19,7 @@ EML is an email client for the university's **top leadership only** — VC, Pro-
 **Non-Goals**
 - Email for anyone outside the executive group — no faculty, staff, or student mailboxes.
 - Any form of auto-send, scheduled send without final human confirmation, or "routine acknowledgment" automation — locked out permanently, not just for MVP.
-- Replacing the underlying mail provider — Tasq is a client over Gmail/Outlook, not a mail server.
+- Replacing the underlying mail provider — UniCore is a client over Gmail/Outlook, not a mail server.
 - Personal (non-institutional) mailbox connections.
 - Calendar integration and delegate (PA/secretary) access — see Open Questions; proposed post-MVP / not in MVP.
 
@@ -71,7 +71,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 - **DPDP Act 2023 — third-party personal data:** mailbox content contains personal data of students, staff, and external parties who are not EML users. Obligations on this module: (a) **purpose limitation** — AI processing restricted to triage/categorize/summarize/extract/draft, nothing else; (b) **no training** on mailbox data, contractually enforced with any model provider; (c) **data minimization in logs** — prompts/outputs retained max 30 days (proposed) for troubleshooting only, then deleted; (d) audit metadata excludes message content.
 - **Data residency / processing:** AI processing occurs on India-region infrastructure, or via a processor bound by a DPDP-compliant data-processing agreement (provider choice is an Open Question). Mailbox-derived data at rest (cache, drafts, tokens) stays in India-region storage per AUTH baseline.
 - **Sensitive content:** medical/disciplinary/grievance content detection restricts AI-output visibility to the mailbox owner (rule 7) — this operationalizes heightened care for sensitive personal data.
-- **Erasure & exit:** on role revocation the executive's cached mailbox data, AI context, drafts, and tokens are purged (§8); provider-side mailbox data is the university's under its own email policies, out of Tasq scope.
+- **Erasure & exit:** on role revocation the executive's cached mailbox data, AI context, drafts, and tokens are purged (§8); provider-side mailbox data is the university's under its own email policies, out of UniCore scope.
 - **Breach:** compromise of the token vault or a cross-mailbox isolation failure is a DPDP personal-data breach; AUTH breach-notification duties apply.
 
 ## 6. User Stories & Acceptance Criteria
@@ -125,7 +125,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 | Mailbox provider rate limits hit | Exponential backoff with jitter; UI shows a stale-inbox indicator with last-sync time; sync resumes automatically. No degraded-accuracy shortcuts. |
 | AI service down or degraded | Email client keeps working fully (read/compose/send); AI features disable with a visible degraded-state indicator. AI is an enhancement, never a dependency for core mail. |
 | Human-edited draft, then user requests regeneration | Regeneration creates a **new draft version**; the human-edited version is never silently overwritten and remains selectable (EML-FR-08). |
-| Executive leaves the role / is transferred | On role revocation: mailbox disconnected, provider tokens revoked, cached content + AI context + unsent drafts purged, purge audited. Their mailbox itself is governed by university email policy, outside Tasq. |
+| Executive leaves the role / is transferred | On role revocation: mailbox disconnected, provider tokens revoked, cached content + AI context + unsent drafts purged, purge audited. Their mailbox itself is governed by university email policy, outside UniCore. |
 | Hallucinated content in an AI draft | Control is layered: source-thread citations for factual claims (EML-FR-09) plus mandatory human review before send (EML-FR-10). No draft leaves without an executive reading it. |
 | Email containing embedded instructions to the AI (prompt injection) | Treated strictly as data; AI behavior never changes based on message content; thread flagged as suspected injection, event logged, user notified in-UI. Forward-style injections ("send this to…") can never succeed because AI has no send/forward capability at all — defense in depth. |
 | Sensitive thread (medical/disciplinary) detected | Thread flagged; AI summaries/extracts visible to the mailbox owner only; excluded from any aggregate views and from label/archive proposals that would surface it elsewhere. Detection false-negatives are mitigated by the owner-only default posture of the whole module. |
@@ -150,7 +150,7 @@ Every AI action (what was triaged/summarized/drafted, over which thread IDs, whe
 
 - The university's institutional email runs on Google Workspace and/or Microsoft 365, and the IT cell can approve the OAuth app (admin consent) with read/draft/send scopes.
 - ~10–30 executives; no bulk-scale requirements.
-- Executives use EML alongside (not instead of) native mail clients; provider mailbox remains the source of truth — Tasq caches, never masters, mail data.
+- Executives use EML alongside (not instead of) native mail clients; provider mailbox remains the source of truth — UniCore caches, never masters, mail data.
 - Default triage/category quality is acceptable at launch with the four default categories; tuning happens in pilot with real (consented) executive feedback.
 - The AI model is accessed as a service with a no-training, bounded-retention contract (provider choice pending — §11).
 

@@ -4,7 +4,7 @@ Module code: AUTH · Status: DRAFT — pending approval · Last updated: 2026-07
 
 ## 1. Summary
 
-Tasq operates its **own identity store** — no SSO in MVP. Every user (student, faculty member, staff, executive) signs in with username/password plus an OTP second factor. Authorization is role-based (RBAC) with **org-unit scoping**: a role grant is always bound to a node in the University → Faculty Division → School → Department → Program → Section hierarchy, and a user sees/acts only within their scope. This document defines the identity lifecycle, credential and session policy, the RBAC model every module builds on, the student device-registration scheme required by QR attendance, and the security and DPDP-compliance controls the whole system inherits.
+UniCore operates its **own identity store** — no SSO in MVP. Every user (student, faculty member, staff, executive) signs in with username/password plus an OTP second factor. Authorization is role-based (RBAC) with **org-unit scoping**: a role grant is always bound to a node in the University → Faculty Division → School → Department → Program → Section hierarchy, and a user sees/acts only within their scope. This document defines the identity lifecycle, credential and session policy, the RBAC model every module builds on, the student device-registration scheme required by QR attendance, and the security and DPDP-compliance controls the whole system inherits.
 
 ## 2. Goals & Non-Goals
 
@@ -14,7 +14,7 @@ Tasq operates its **own identity store** — no SSO in MVP. Every user (student,
 - An RBAC + scope model expressive enough for every module's authorization matrix.
 - Student device registration with an approval-based change flow.
 - Central immutable audit log service used by all modules.
-- DPDP Act 2023 compliance foundations: consent capture, grievance/correction flow, minor handling, breach process.
+- DPDP Act 2023 compliance foundations: consent capture, grievance/correction flow, breach process. (No minor handling — all students are 18+ per locked policy, 00-overview.md §7.)
 
 **Non-Goals**
 - SSO/federation (Google/Microsoft) — future phase; the identity model must not preclude adding it.
@@ -45,7 +45,28 @@ Tasq operates its **own identity store** — no SSO in MVP. Every user (student,
 - **Singleton leadership roles per org unit:** designated roles allow at most **one active grant per org unit** — one HoD per Department, one Dean per School, one Class In-charge per Section, and one VC / Registrar / Pro-Chancellor / Chancellor per University (the last two are top-of-hierarchy roles introduced by the Leave module, see 10-leave-management.md). Granting a second active holder is rejected; replacing the holder (e.g., a permanent HoD arriving to end an additional charge) uses the **supersede flow**: old grant revoked and new grant issued in one atomic, audited operation, so the unit is never leaderless and never double-headed.
 - Time-bound grants auto-expire; expiry is enforced at check time, not by cleanup jobs.
 - **Academic-term-bound grants:** roles that represent a teaching-term duty — `class-incharge` today, and any future per-term academic role — are bound to (role, org unit, **academic term**) rather than to fixed dates. The term is semester or year per the owning School. These grants are **revoked automatically by the term-closure event that PRM ratification publishes for the Section's cohort** (see 06-student-promotion.md), with the configured term-archival date as a backstop for cohorts that never ratify. A new term always requires fresh designation — nothing rolls over.
-- **Subject-teaching allocation is not an AUTH grant:** a Faculty Member's right to teach a subject in a Section for a term derives from the term's **published timetable** (see 03-timetable-management.md) and dies with that term's archival — AUTH stores no separate subject-allocation role, so there is exactly one source of truth for "who teaches what."
+- **Subject-teaching allocation is not an AUTH grant:** a Faculty Member's right to teach a subject in a Section for a term derives from the term's **published timetable** (see 03-timetable-management.md) and dies with that term's archival — AUTH stores no separate subject-allocation role, so there is exactly one source of truth for "who teaches what." (Question-bank *authoring* is the one exception: QPG accepts either current-term teaching or an HoD-issued `subject-author` grant from the registry below — see 08-question-paper-generation.md.)
+
+### Role registry (single catalog for all module roles)
+
+Every role any module references is cataloged here; modules must not invent roles outside this registry. Each entry names the scope level and the designating authority (who may grant it, via the standard grant mechanism above):
+
+| Role | Scope | Designated by | Consumed by |
+|---|---|---|---|
+| `super-admin` | University | University governance (bootstrap) | All modules |
+| `system-admin` | Campus | Super Admin | All modules |
+| `hod`, `dean`, `class-incharge` | Dept / School / Section | Per singleton + supersede rules above | All modules |
+| `timetable-cell` | Campus | System Admin | TTM |
+| `exam-cell` (incl. lead) | Campus/University | Registrar | QPG, TSK (assigner grant), PRM (results import) |
+| `school-admin` (config role) | School | School Dean | ATT/TSK School-level configuration |
+| `subject-coordinator` | Department (subject set) | HoD | QPG moderation |
+| `subject-author` | Department (subject set) | HoD | QPG bank authoring outside a teaching term |
+| `school-exam-coordinator` | School | Exam Cell lead | QPG blueprints |
+| `hr-designate` | University | Registrar | LVE catalog/quotas/HR export |
+| VC/Pro-VC office recipient list | University | Super Admin | TSK escalation top-of-chain |
+| `pro-chancellor`, `chancellor` | University (singleton) | University governance | LVE approvals |
+
+The registry also carries the **unit-head map** for non-academic staff (e.g., Exam Cell staff → Registrar; Department office staff → HoD), used by LVE routing, TSK escalation, and TSK skip-level visibility.
 
 ### Per-action authorization
 
@@ -57,6 +78,7 @@ Tasq operates its **own identity store** — no SSO in MVP. Every user (student,
 | Designate Class In-charge (term-bound grant) | HoD for Sections in their Department; System Admin as fallback | API + service layer |
 | View audit log | Super Admin, System Admin (own scope); read-only, no deletion by anyone | API |
 | Deactivate user | System Admin (scope); deactivation is immediate session revocation | API + session store |
+| Create/rename/re-parent/deactivate org units (Faculty Division/School/Department/Program) | Super Admin only; deactivate-never-delete; all changes audited | API + service layer |
 
 ### Business rules
 
@@ -75,7 +97,7 @@ Central append-only audit service. Every module writes: actor, action, object, s
 ## 5. Legal & Regulatory Requirements
 
 - **DPDP notice & consent:** at first login every user is shown a plain-language notice (what data, why, retention) and consent is recorded (version, timestamp). Geolocation consent for attendance is a **separate, explicit** consent item shown to students; refusing it triggers the attendance fallback path (see ATT doc) rather than blocking login.
-- **Minors:** onboarding data flags students under 18; for them, verifiable parental consent (captured during ERP admission or via the onboarding flow) must exist before their personal data is processed; the system blocks activation of a minor's account without a recorded parental-consent artifact.
+- **Minors:** not applicable — all students are 18+ at admission (locked 24-07-2026, 00-overview.md §7). No parental-consent capture, minor flag, or DOB age guard exists.
 - **Correction & erasure:** a grievance flow lets users request data correction; erasure requests are honored subject to the university's statutory record-keeping duties (academic records are exempt from erasure while the retention mandate applies — the response must say so, not silently refuse).
 - **Breach:** security-event monitoring feeds a breach-response runbook; personal-data breaches are reported to the Data Protection Board and affected users per DPDP timelines.
 - **Data residency:** all personal data stored in India-region infrastructure.
@@ -108,14 +130,15 @@ Central append-only audit service. Every module writes: actor, action, object, s
 - AUTH-FR-08: Central append-only audit service with 7-year retention and scoped read access.
 - AUTH-FR-09: Consent capture (versioned notices; separate geolocation consent), consent-state API for other modules.
 - AUTH-FR-10: Grievance flow for correction/erasure requests with status tracking and statutory-exemption responses.
-- AUTH-FR-11: Minor flag + parental-consent artifact enforcement before account activation.
+- AUTH-FR-11: *(Removed — locked 24-07-2026: all students are 18+ at admission; no minor/parental-consent handling exists anywhere in the system. See 00-overview.md §7.)*
 - AUTH-FR-12: Security telemetry: failed-login spikes, impossible-travel OTP requests, lockout storms → alerts to IT cell.
 - AUTH-FR-13: Academic-term-bound grant type: grants carry (role, org unit, academic term); AUTH subscribes to PRM term-closure events and revokes all term-bound grants for the closed Section/cohort within 60 s; the configured term-archival date is the revocation backstop. Revocations are audited like any grant change.
 - AUTH-FR-14: PRM rollback (within its window) **restores** the term-bound grants that the rolled-back ratification revoked, so the Class In-charge regains authority over the re-opened cohort; restore events are audited.
 - AUTH-FR-15: Class In-charge designation flow: HoD designates one Class In-charge per Section per term (term-bound grant per AUTH-FR-13); re-designation mid-term supersedes (old grant revoked, new issued, both audited). Singleton enforcement per AUTH-FR-16.
 - AUTH-FR-16: Singleton-role enforcement: for designated leadership roles (`hod` per Department, `dean` per School, `class-incharge` per Section), the system rejects a second active grant on the same org unit; the only path to change holders is the atomic supersede operation (revoke + issue together, both audited). Enforcement is at grant-write time AND at permission-check time (a data-level anomaly fails closed).
 - AUTH-FR-17: Additional-charge grants: the same role may be granted to one person at multiple org units (Dean of School A + additional charge of School B; HoD of one Department temporarily heading another). Additional-charge grants are flagged as such, carry a validity period or "until-superseded" marker, and end automatically when a permanent holder is granted via supersede. All in-flight approvals at that unit transfer to the new holder per PRM-FR-15 continuity.
-- AUTH-FR-18: **Reporting-chain configuration** (University-level, role-based): Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor, with Registrar → Pro-Chancellor. Exposed as a resolution API ("who is X's reporting person") consumed by LVE routing/cascade (10-leave-management.md) and TSK escalation. Changes are audited; the chain must be acyclic with Chancellor as the unique terminal.
+- AUTH-FR-18: **Reporting-chain configuration** (University-level, role-based): Class In-charge → HoD → Dean → VC → Pro-Chancellor → Chancellor, with Registrar → Pro-Chancellor and **Principal/Director → VC**; non-academic staff resolve via the registry's unit-head map. Exposed as a resolution API ("who is X's reporting person") consumed by LVE routing/cascade (10-leave-management.md) and TSK escalation/visibility. The API also reports each level's **holder status (active / on-approved-leave / vacant)** so consumers can cascade past on-leave or vacant levels. Changes are audited; the chain must be acyclic with Chancellor as the unique terminal.
+- AUTH-FR-19: **Org-structure administration:** Super Admin creates, renames, re-parents, and deactivates org units (Faculty Division, School, Department, Program). Units are never hard-deleted (history and scoped grants hang off them); deactivation blocks new grants/imports against the unit while preserving reads. All changes audited with before/after. Section instances are NOT managed here — they are per-term entities created by the Timetable Cell during term setup (TTM-FR-19).
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -147,7 +170,7 @@ Central append-only audit service. Every module writes: actor, action, object, s
 
 - The university can send SMS at scale (DLT-registered sender) — India SMS regulations apply.
 - ERP provides a stable unique student ID used as the identity join key.
-- Parental-consent artifacts for minors are collectable at admission time via the ERP; Tasq stores the reference/proof.
+- All admitted students are 18 or older (university admission policy, locked 24-07-2026); no minor-consent handling is required or built.
 - Staff data (mobile/email) is accurate enough in ERP for OTP delivery at go-live.
 
 ## 11. Open Questions
@@ -174,9 +197,7 @@ flowchart TD
   E -- Yes --> E1[Show DPDP notice · capture consent · force password change if first login]
   E -- No --> F[Issue session scoped to role grants]
   E1 --> F
-  F --> G{Minor without parental-consent artifact?}
-  G -- Yes --> G1[Block activation · route to grievance/admin]
-  G -- No --> H[User lands on role-scoped home]
+  F --> H[User lands on role-scoped home]
 ```
 
 ## 13. Test Cases
@@ -192,7 +213,7 @@ flowchart TD
 | TC-AUTH-007 | Deactivation revokes sessions | Access | P0 | User has active session | Deactivate user; user calls API | 401 within 60 s | US-AUTH-4 |
 | TC-AUTH-008 | Device change invalidates old device | Happy | P0 | Approved change request | Old device attempts attendance scan | Rejected: unregistered device | AUTH-FR-06 |
 | TC-AUTH-009 | Two devices race to register | Concurrency | P1 | One approval pending | Second change request submitted | Second request queued/rejected; never two active devices | AUTH-FR-06 |
-| TC-AUTH-010 | Minor without parental consent blocked | Legal | P0 | Imported student, age 17, no consent artifact | Activate account | Activation blocked with explanatory status | AUTH-FR-11 |
+| TC-AUTH-010 | Org-unit CRUD restricted to Super Admin | Access | P0 | System Admin (campus scope) session | Attempt to create a Department; then Super Admin creates it and later deactivates it | System Admin gets 403 (audited); Super Admin succeeds; deactivated unit rejects new grants/imports but remains readable; no delete API exists | AUTH-FR-19 |
 | TC-AUTH-011 | Erasure request on academic record | Legal | P1 | Student files erasure grievance | Process request | Response cites statutory retention exemption; request logged | §5 |
 | TC-AUTH-012 | OTP flood protection | Negative | P1 | Target mobile number | Request 6 OTPs within an hour | 6th request throttled | §8 |
 | TC-AUTH-013 | Expired time-bound grant | Boundary | P0 | Class In-charge grant expired yesterday | Attempt attendance correction | 403; grant expiry enforced at check time | §4 RBAC |
@@ -206,4 +227,4 @@ flowchart TD
 | TC-AUTH-021 | Permanent HoD supersedes additional charge | Happy | P0 | Additional-charge HoD active on Dept-CSE with pending approvals | Supersede with the permanent appointee | One atomic op: charge revoked + new grant issued; pending approvals transfer; unit never has 0 or 2 active HoDs at any instant | AUTH-FR-16/17 |
 | TC-AUTH-022 | Concurrent grant race on one Department | Concurrency | P1 | No active HoD on a Department | Two admins submit HoD grants simultaneously | Exactly one succeeds; the other is rejected by the singleton constraint | AUTH-FR-16 |
 
-Coverage: all §6 acceptance criteria, the §4 authorization matrix, DPDP minor/erasure/consent obligations (§5), term-bound grant lifecycle (TC-015/016/018), singleton + additional-charge rules (TC-019–022), and every §8 edge case except SMS-gateway failover (covered operationally, add TC in integration phase) map to at least one test.
+Coverage: all §6 acceptance criteria, the §4 authorization matrix (incl. org-unit CRUD, TC-010), DPDP erasure/consent obligations (§5), term-bound grant lifecycle (TC-015/016/018), singleton + additional-charge rules (TC-019–022), and every §8 edge case except SMS-gateway failover (covered operationally, add TC in integration phase) map to at least one test. Minor-consent tests were removed with the 18+ policy lock (00-overview.md §7).
