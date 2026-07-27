@@ -8,6 +8,13 @@ from unicore.core.config import get_settings
 from unicore.core.health import router as health_router
 from unicore.core.logging import configure_logging
 from unicore.core.middleware import access_log_middleware, install_error_envelope
+from unicore.modules.audit.router import router as audit_router
+from unicore.modules.auth.router import router as auth_router
+from unicore.modules.org.router import router as org_router
+from unicore.modules.rbac.router import router as rbac_router
+from unicore.modules.user.router import router as user_router
+
+MODULE_ROUTERS = (auth_router, user_router, org_router, rbac_router, audit_router)
 
 
 def _configure_tracing(service_name: str) -> None:
@@ -27,6 +34,8 @@ def create_app() -> FastAPI:
     app.middleware("http")(access_log_middleware)
     install_error_envelope(app)
     app.include_router(health_router)
+    for module_router in MODULE_ROUTERS:
+        app.include_router(module_router)
 
     FastAPIInstrumentor.instrument_app(app)
     return app
