@@ -6,6 +6,7 @@ what would have been sent — codes are never logged."""
 from dataclasses import dataclass
 from typing import Protocol
 
+from unicore.core.config import get_settings
 from unicore.core.logging import get_logger, timed
 
 
@@ -29,6 +30,11 @@ class DevStubProvider:
 
     async def send(self, to: str, body: str) -> None:
         self.outbox.append(Message(self.channel, to, body))
+        # Dev-only: echo to the server console so the operator can complete
+        # OTP flows locally. Real providers replace this stub per environment;
+        # codes are never written to structured logs.
+        if get_settings().environment == "dev":
+            print(f"[dev-{self.channel}] to={to}: {body}")  # noqa: T201
 
 
 sms_provider = DevStubProvider("sms")
