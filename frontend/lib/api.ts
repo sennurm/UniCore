@@ -28,9 +28,12 @@ export async function api<T>(
     headers,
     body: options.body === undefined ? undefined : JSON.stringify(options.body),
   });
-  if (response.status === 401 && typeof window !== "undefined") {
+  if (response.status === 401 && token && typeof window !== "undefined") {
+    // Session expired/revoked. Credential failures (no token attached) fall
+    // through to the normal error path and render inline.
     setToken(null);
     window.location.href = "/login";
+    throw new ApiError(401, "Session expired — please sign in again.");
   }
   if (!response.ok) {
     let detail = response.statusText;

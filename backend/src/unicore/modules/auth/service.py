@@ -213,7 +213,7 @@ async def change_password(
     try:
         _hasher.verify(user.password_hash, current)
     except VerifyMismatchError:
-        raise HTTPException(status_code=401, detail="Current password incorrect.") from None
+        raise HTTPException(status_code=403, detail="Current password incorrect.") from None
     validate_password_policy(new)
     user.password_hash = hash_password(new)
     user.force_password_change = False
