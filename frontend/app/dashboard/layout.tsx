@@ -1,11 +1,22 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { setToken } from "@/lib/api";
+import { getToken, setToken } from "@/lib/api";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
+  const [ready, setReady] = useState(false);
+
+  // Auth guard: no session token -> straight to sign-in, never a raw API error.
+  useEffect(() => {
+    if (!getToken()) router.replace("/login");
+    else setReady(true);
+  }, [router]);
+
+  if (!ready) return null;
+
   return (
     <>
       <nav>
