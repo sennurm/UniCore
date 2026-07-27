@@ -57,6 +57,7 @@ async def run(
             log.info("super admin account already exists", user_id=str(admin.id))
 
     await _ensure_super_admin_grant(admin.id)
+    await _ensure_initial_password(admin.id)
     return root.id, admin.id
 
 
@@ -96,6 +97,25 @@ async def _ensure_super_admin_grant(admin_id: uuid.UUID) -> None:
         await session.commit()
         rbac_service.invalidate_user(admin_id)
         get_logger().info("super admin grant issued", user_id=str(admin_id))
+
+
+async def _ensure_initial_password(admin_id: uuid.UUID) -> None:
+    """One-time initial credential, printed to the operator (forced change on login)."""
+    import secrets
+
+    from unicore.modules.auth import service as auth_service
+    from unicore.modules.user import dao as user_dao_2
+
+    async with get_sessionmaker()() as session:
+        admin = await user_dao_2.get_by_id(session, admin_id)
+        if admin is None or admin.password_hash is not None:
+            return
+        temp = secrets.token_urlsafe(9)
+        admin.password_hash = auth_service.hash_password(temp)
+        admin.force_password_change = True
+        await session.commit()
+    # Printed once for the operator running bootstrap — never logged.
+    print(f"INITIAL SUPER ADMIN PASSWORD (change on first login): {temp}")  # noqa: T201
 
 
 if __name__ == "__main__":
