@@ -78,3 +78,13 @@ class Grant(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class ReportingEdge(Base):
+    """AUTH-FR-18: role-level reporting chain (acyclic; Chancellor terminal —
+    the terminal role simply has no outgoing edge)."""
+
+    __tablename__ = "reporting_edges"
+
+    from_role: Mapped[str] = mapped_column(ForeignKey("roles.code"), primary_key=True)
+    to_role: Mapped[str] = mapped_column(ForeignKey("roles.code"), nullable=False)

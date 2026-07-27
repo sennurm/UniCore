@@ -19,6 +19,7 @@ from unicore.core import security  # noqa: E402
 from unicore.core.db import get_engine, get_sessionmaker  # noqa: E402
 from unicore.core.security import AuthContext, register_token_verifier  # noqa: E402
 from unicore.main import create_app  # noqa: E402
+from unicore.modules.auth.providers import email_provider, sms_provider  # noqa: E402
 from unicore.modules.rbac import service as rbac_service  # noqa: E402
 from unicore.modules.rbac.models import Grant  # noqa: E402
 from unicore.modules.user import dao as user_dao  # noqa: E402
@@ -39,7 +40,11 @@ _token_map: dict[str, tuple[str, tuple[str, ...]]] = {}
 async def _dispatch_verifier(token: str) -> AuthContext:
     entry = _token_map.get(token)
     if entry is None:
-        raise security.InvalidTokenError
+        # Fall through to real Redis sessions so login-flow tokens keep working
+        # while fake per-test actors are active.
+        from unicore.modules.auth import service as auth_service
+
+        return await auth_service.verify_session_token(token)
     username, roles = entry
     async with get_sessionmaker()() as session:
         user = await user_dao.get_by_username(session, username)
@@ -67,6 +72,8 @@ def _reset_auth_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(security, "_token_verifier", None)
     _token_map.clear()
     rbac_service._grant_cache.clear()
+    sms_provider.outbox.clear()
+    email_provider.outbox.clear()
 
 
 @pytest.fixture
@@ -110,8 +117,21 @@ async def db(database: None) -> AsyncIterator[None]:
     get_sessionmaker.cache_clear()
     engine = get_engine()
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE org_units, users, audit_events, grants CASCADE"))
+        await conn.execute(
+            text(
+                "TRUNCATE org_units, users, audit_events, grants, otp_challenges, "
+                "devices, device_change_requests, consent_records, grievances, "
+                "domain_events CASCADE"
+            )
+        )
+    from unicore.core.redis import get_redis
+
+    get_redis.cache_clear()
+    redis_client = get_redis()
+    await redis_client.flushdb()
     yield
+    await redis_client.aclose()
+    get_redis.cache_clear()
     await engine.dispose()
 
 
@@ -123,8 +143,8 @@ def make_client(db: None) -> Callable[..., httpx.AsyncClient]:
     def _make(*roles: str, user_id: str = "test-actor") -> httpx.AsyncClient:
         token = uuid_mod.uuid4().hex
         _token_map[token] = (user_id, roles)
-        register_token_verifier(_dispatch_verifier)
-        app = create_app()
+        app = create_app()  # registers the real verifier...
+        register_token_verifier(_dispatch_verifier)  # ...the dispatcher wraps it
         return httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app),
             base_url="http://test",

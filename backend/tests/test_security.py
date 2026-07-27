@@ -54,8 +54,8 @@ async def test_invalid_token_rejected() -> None:
     async def verifier(token: str) -> AuthContext:
         raise InvalidTokenError
 
-    register_token_verifier(verifier)
     async with _client() as client:
+        register_token_verifier(verifier)
         response = await client.get("/probe", headers={"Authorization": "Bearer bad"})
     assert response.status_code == 401
 
@@ -67,8 +67,8 @@ async def test_valid_token_passes_and_binds_pseudonymous_user_id(
         assert token == "good"
         return AuthContext(user_id="user-123", session_id="s-1")
 
-    register_token_verifier(verifier)
     async with _client() as client:
+        register_token_verifier(verifier)
         response = await client.get("/probe", headers={"Authorization": "Bearer good"})
     assert response.status_code == 200
 

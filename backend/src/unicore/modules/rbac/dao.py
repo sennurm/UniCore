@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from unicore.modules.rbac.models import Grant, Role
+from unicore.modules.rbac.models import Grant, ReportingEdge, Role
 
 
 async def get_role(session: AsyncSession, code: str) -> Role | None:
@@ -61,4 +61,15 @@ async def term_bound_grants_on_units(
     if revoke_cause is not None:
         query = query.where(Grant.revoke_cause == revoke_cause)
     result = await session.execute(query)
+    return result.scalars().all()
+
+
+async def reporting_edge(session: AsyncSession, from_role: str) -> ReportingEdge | None:
+    return await session.get(ReportingEdge, from_role)
+
+
+async def active_grants_by_role(session: AsyncSession, role_code: str) -> Sequence[Grant]:
+    result = await session.execute(
+        select(Grant).where(Grant.role_code == role_code, Grant.status == "active")
+    )
     return result.scalars().all()

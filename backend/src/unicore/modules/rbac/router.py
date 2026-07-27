@@ -52,3 +52,12 @@ async def list_user_grants(
 ) -> list[GrantOut]:
     grants = await service.list_user_grants(session, user_id)
     return [GrantOut.model_validate(g) for g in grants]
+
+
+@router.get("/users/{user_id}/reporting")
+async def reporting_for_user(
+    user_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("rbac:read")),
+) -> list[dict]:
+    return await service.resolve_reporting(session, user_id)

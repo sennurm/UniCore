@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Enum, Index, String, func, text
+from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,3 +49,36 @@ class User(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+GRIEVANCE_KINDS = ("correction", "erasure")
+GRIEVANCE_STATUSES = ("open", "resolved")
+
+STATUTORY_EXEMPTION_NOTE = (
+    "Academic records are retained under statutory retention mandates and are "
+    "exempt from erasure while the retention period applies (DPDP grievance "
+    "response per AUTH \u00a75). The request and this response are logged."
+)
+
+
+class Grievance(Base):
+    """DPDP correction/erasure grievances (AUTH-FR-10)."""
+
+    __tablename__ = "grievances"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Enum(*GRIEVANCE_KINDS, name="grievance_kind", create_type=False), nullable=False
+    )
+    details: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Enum(*GRIEVANCE_STATUSES, name="grievance_status", create_type=False),
+        nullable=False,
+        default="open",
+    )
+    response: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

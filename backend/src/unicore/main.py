@@ -8,10 +8,12 @@ from unicore.core.config import get_settings
 from unicore.core.health import router as health_router
 from unicore.core.logging import configure_logging
 from unicore.core.middleware import access_log_middleware, install_error_envelope
-from unicore.core.security import auth_gate_middleware
+from unicore.core.security import auth_gate_middleware, register_token_verifier
 from unicore.modules.audit.router import router as audit_router
+from unicore.modules.auth import service as auth_service
 from unicore.modules.auth.router import router as auth_router
 from unicore.modules.org.router import router as org_router
+from unicore.modules.rbac import service as rbac_service
 from unicore.modules.rbac.router import router as rbac_router
 from unicore.modules.user.router import router as user_router
 
@@ -42,6 +44,10 @@ def create_app() -> FastAPI:
         app.include_router(module_router)
 
     FastAPIInstrumentor.instrument_app(app)
+
+    # Real session verification + outbox subscriptions (both idempotent).
+    register_token_verifier(auth_service.verify_session_token)
+    rbac_service.register_event_handlers()
     return app
 
 

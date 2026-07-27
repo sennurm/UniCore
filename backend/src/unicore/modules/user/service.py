@@ -6,6 +6,7 @@ REACTIVATED, never duplicated — matched on ERP ID.
 """
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unicore.core.security import AuthContext
 from unicore.modules.audit import service as audit_service
 from unicore.modules.user import dao
-from unicore.modules.user.models import User
+from unicore.modules.user.models import STATUTORY_EXEMPTION_NOTE, Grievance, User
 from unicore.modules.user.schemas import UserCreate
 
 
@@ -91,7 +92,9 @@ async def deactivate_user(session: AsyncSession, ctx: AuthContext, user_id: uuid
         return user
     before = _snapshot(user)
     user.status = "deactivated"
-    # Phase 3: session revocation within 60 s hooks in here (AUTH-FR-07).
+    from unicore.modules.auth import service as auth_service  # lazy: avoids import cycle
+
+    await auth_service.revoke_user_sessions(user.id)  # AUTH-FR-07: immediate revocation
     await audit_service.record(
         session,
         actor=ctx.user_id,
@@ -105,8 +108,66 @@ async def deactivate_user(session: AsyncSession, ctx: AuthContext, user_id: uuid
     return user
 
 
+async def get_by_username(session: AsyncSession, username: str) -> User | None:
+    return await dao.get_by_username(session, username)
+
+
 async def get_user(session: AsyncSession, user_id: uuid.UUID) -> User:
     user = await dao.get_by_id(session, user_id)
     if user is None:
         raise HTTPException(status_code=404, detail="User not found.")
     return user
+
+
+# --- DPDP grievances (AUTH-FR-10) ---------------------------------------------
+
+
+async def file_grievance(
+    session: AsyncSession, ctx: AuthContext, kind: str, details: str
+) -> Grievance:
+    grievance = Grievance(user_id=uuid.UUID(ctx.user_id), kind=kind, details=details)
+    session.add(grievance)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="user.grievance.filed",
+        object_type="grievance",
+        object_id=str(grievance.id),
+        after={"kind": kind},
+    )
+    await session.commit()
+    return grievance
+
+
+async def list_own_grievances(session: AsyncSession, ctx: AuthContext) -> list[Grievance]:
+    return list(await dao.list_grievances(session, uuid.UUID(ctx.user_id), None))
+
+
+async def list_open_grievances(session: AsyncSession) -> list[Grievance]:
+    return list(await dao.list_grievances(session, None, "open"))
+
+
+async def resolve_grievance(
+    session: AsyncSession, ctx: AuthContext, grievance_id: uuid.UUID, response: str
+) -> Grievance:
+    grievance = await dao.get_grievance(session, grievance_id)
+    if grievance is None or grievance.status != "open":
+        raise HTTPException(status_code=404, detail="No open grievance found.")
+    # Erasure of academic records: the statutory exemption must be STATED,
+    # never a silent refusal (AUTH doc §5).
+    if grievance.kind == "erasure" and "statutory" not in response.lower():
+        response = f"{response}\n\n{STATUTORY_EXEMPTION_NOTE}"
+    grievance.status = "resolved"
+    grievance.response = response
+    grievance.resolved_at = datetime.now(UTC)
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="user.grievance.resolved",
+        object_type="grievance",
+        object_id=str(grievance.id),
+        after={"kind": grievance.kind, "status": "resolved"},
+    )
+    await session.commit()
+    return grievance

@@ -5,7 +5,7 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from unicore.modules.user.models import User
+from unicore.modules.user.models import Grievance, User
 
 
 async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
@@ -20,3 +20,19 @@ async def get_by_erp_id(session: AsyncSession, erp_id: str) -> User | None:
 async def get_by_username(session: AsyncSession, username: str) -> User | None:
     result = await session.execute(select(User).where(User.username == username))
     return result.scalar_one_or_none()
+
+
+async def get_grievance(session: AsyncSession, grievance_id: uuid.UUID) -> Grievance | None:
+    return await session.get(Grievance, grievance_id)
+
+
+async def list_grievances(
+    session: AsyncSession, user_id: uuid.UUID | None, status: str | None
+):
+    query = select(Grievance).order_by(Grievance.created_at.desc())
+    if user_id is not None:
+        query = query.where(Grievance.user_id == user_id)
+    if status is not None:
+        query = query.where(Grievance.status == status)
+    result = await session.execute(query)
+    return result.scalars().all()

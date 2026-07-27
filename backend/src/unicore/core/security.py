@@ -23,7 +23,15 @@ from fastapi.responses import JSONResponse
 
 from unicore.core.config import get_settings
 
-ALWAYS_PUBLIC_PATHS = frozenset({"/health"})
+ALWAYS_PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/auth/login",
+        "/auth/otp/verify",
+        "/auth/password-reset/request",
+        "/auth/password-reset/confirm",
+    }
+)
 DEV_ONLY_PUBLIC_PATHS = frozenset({"/docs", "/redoc", "/openapi.json"})
 
 

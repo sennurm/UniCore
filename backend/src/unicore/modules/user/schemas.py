@@ -29,3 +29,23 @@ class UserOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class GrievanceCreate(BaseModel):
+    kind: str = Field(pattern=r"^(correction|erasure)$")
+    details: str = Field(min_length=5)
+
+
+class GrievanceResolve(BaseModel):
+    response: str = Field(min_length=5)
+
+
+class GrievanceOut(BaseModel):
+    id: uuid.UUID
+    kind: str
+    details: str
+    status: str
+    response: str | None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

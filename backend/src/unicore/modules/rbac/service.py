@@ -39,6 +39,9 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "user:deactivate": ("super-admin", "system-admin"),
     "rbac:grant": ("super-admin", "system-admin", "hod"),
     "rbac:read": ("super-admin", "system-admin"),
+    "audit:read": ("super-admin", "system-admin"),
+    "device:approve": ("super-admin", "system-admin"),
+    "grievance:resolve": ("super-admin", "system-admin"),
 }
 
 # Who may issue a given role (AUTH §4 matrix). Default: admins only.
@@ -401,3 +404,76 @@ def _snapshot(grant: Grant) -> dict[str, str | None]:
         "term_code": grant.term_code,
         "revoke_cause": grant.revoke_cause,
     }
+
+
+# --- domain-event subscriptions (Phase 4 outbox) ------------------------------
+
+
+def register_event_handlers() -> None:
+    """Idempotent; called at app startup. PRM publishes these topics for real
+    in its milestone — the handlers are live from now on."""
+    from unicore.modules.audit import service as audit_svc
+
+    audit_svc.subscribe("prm.term-closure", _on_term_closure)
+    audit_svc.subscribe("prm.term-rollback", _on_term_rollback)
+
+
+async def _on_term_closure(payload: dict) -> None:
+    async with get_sessionmaker()() as session:
+        await handle_term_closure(
+            session,
+            payload["term_code"],
+            [uuid.UUID(x) for x in payload["section_unit_ids"]],
+        )
+
+
+async def _on_term_rollback(payload: dict) -> None:
+    async with get_sessionmaker()() as session:
+        await handle_term_rollback(
+            session,
+            payload["term_code"],
+            [uuid.UUID(x) for x in payload["section_unit_ids"]],
+        )
+
+
+# --- reporting-chain resolution (AUTH-FR-18) ----------------------------------
+
+
+async def resolve_reporting(session: AsyncSession, user_id: uuid.UUID) -> list[dict]:
+    """For each of the user's active grants: the next reporting role, its
+    holder(s) at the nearest covering scope, and vacancy status — consumed by
+    LVE routing/cascade and TSK escalation."""
+    rows = await dao.active_grants_for_user(session, user_id)
+    unit_ids = [g.org_unit_id for g, _ in rows if g.org_unit_id is not None]
+    paths = await org_service.get_unit_paths(session, unit_ids)
+
+    results: list[dict] = []
+    for grant, _role in rows:
+        edge = await dao.reporting_edge(session, grant.role_code)
+        if edge is None:
+            results.append(
+                {"role": grant.role_code, "reports_to": None, "status": "terminal", "holders": []}
+            )
+            continue
+        grant_path = paths.get(grant.org_unit_id) if grant.org_unit_id else None
+        holder_grants = await dao.active_grants_by_role(session, edge.to_role)
+        holder_unit_ids = [g.org_unit_id for g in holder_grants if g.org_unit_id is not None]
+        holder_paths = await org_service.get_unit_paths(session, holder_unit_ids)
+        holders = []
+        for hg in holder_grants:
+            hp = holder_paths.get(hg.org_unit_id) if hg.org_unit_id else None
+            covers = hp is None or (
+                grant_path is not None
+                and (grant_path == hp or grant_path.startswith(f"{hp}."))
+            )
+            if covers:
+                holders.append(str(hg.user_id))
+        results.append(
+            {
+                "role": grant.role_code,
+                "reports_to": edge.to_role,
+                "status": "active" if holders else "vacant",
+                "holders": holders,
+            }
+        )
+    return results
