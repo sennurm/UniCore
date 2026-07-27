@@ -1,1 +1,51 @@
 """ORM tables owned by the user module (aggregated into core.db.Base.metadata)."""
+
+import uuid
+from datetime import datetime
+
+from sqlalchemy import DateTime, Enum, Index, String, func, text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column
+
+from unicore.core.db import Base
+
+USER_KINDS = ("student", "staff")
+# Locked lifecycle (ONB/AUTH): IMPORTED -> ACTIVE -> DEACTIVATED | WITHDRAWN.
+USER_STATUSES = ("imported", "active", "deactivated", "withdrawn")
+
+
+class User(Base):
+    __tablename__ = "users"
+    __table_args__ = (
+        # ERP ID is the identity join key; unique when present (staff may have none).
+        Index(
+            "uq_users_erp_id",
+            "erp_id",
+            unique=True,
+            postgresql_where=text("erp_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    erp_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    full_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    mobile: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    kind: Mapped[str] = mapped_column(
+        Enum(*USER_KINDS, name="user_kind", create_type=False), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        Enum(*USER_STATUSES, name="user_status", create_type=False),
+        nullable=False,
+        default="active",
+    )
+    # Credential fields are populated by the auth module in Phase 3.
+    password_hash: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    force_password_change: Mapped[bool] = mapped_column(nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

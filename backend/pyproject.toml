@@ -41,6 +41,13 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E402"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection idiom: Depends(...) in argument defaults.
+extend-immutable-calls = ["fastapi.Depends", "unicore.modules.rbac.service.require_permission"]
+
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "src"
