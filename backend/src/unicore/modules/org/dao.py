@@ -25,6 +25,17 @@ async def list_children(session: AsyncSession, parent_id: uuid.UUID) -> Sequence
     return result.scalars().all()
 
 
+async def paths_for_ids(
+    session: AsyncSession, unit_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    if not unit_ids:
+        return {}
+    result = await session.execute(
+        select(OrgUnit.id, OrgUnit.path).where(OrgUnit.id.in_(unit_ids))
+    )
+    return {row.id: row.path for row in result}
+
+
 async def path_exists(session: AsyncSession, path: str) -> bool:
     result = await session.execute(select(OrgUnit.id).where(OrgUnit.path == path))
     return result.scalar_one_or_none() is not None

@@ -56,6 +56,7 @@ async def run(
         else:
             log.info("super admin account already exists", user_id=str(admin.id))
 
+    await _ensure_super_admin_grant(admin.id)
     return root.id, admin.id
 
 
@@ -75,6 +76,26 @@ def main() -> None:
             args.admin_full_name,
         )
     )
+
+
+async def _ensure_super_admin_grant(admin_id: uuid.UUID) -> None:
+    """Issue the super-admin grant directly (bootstrap predates any granter)."""
+    from unicore.modules.rbac import dao as rbac_dao
+    from unicore.modules.rbac import service as rbac_service
+    from unicore.modules.rbac.models import Grant
+
+    async with get_sessionmaker()() as session:
+        existing = [
+            g
+            for g in await rbac_dao.grants_for_user(session, admin_id)
+            if g.role_code == "super-admin" and g.status == "active"
+        ]
+        if existing:
+            return
+        session.add(Grant(user_id=admin_id, role_code="super-admin", granted_by="bootstrap"))
+        await session.commit()
+        rbac_service.invalidate_user(admin_id)
+        get_logger().info("super admin grant issued", user_id=str(admin_id))
 
 
 if __name__ == "__main__":

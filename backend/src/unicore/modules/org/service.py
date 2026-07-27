@@ -176,6 +176,13 @@ async def reparent_unit(
     return unit
 
 
+async def get_unit_paths(
+    session: AsyncSession, unit_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, str]:
+    """Batch id->ltree-path lookup for other modules (rbac scope checks)."""
+    return await dao.paths_for_ids(session, unit_ids)
+
+
 async def get_unit(session: AsyncSession, unit_id: uuid.UUID) -> OrgUnit:
     return await _get_or_404(session, unit_id)
 
@@ -189,3 +196,52 @@ async def _get_or_404(session: AsyncSession, unit_id: uuid.UUID) -> OrgUnit:
     if unit is None:
         raise HTTPException(status_code=404, detail="Org unit not found.")
     return unit
+
+
+async def create_section_instance(
+    session: AsyncSession,
+    ctx: AuthContext,
+    program_id: uuid.UUID,
+    label: str,
+    term_code: str,
+) -> OrgUnit:
+    """Per-term Section instance (TTM-FR-19). Called by TTM term setup — not org admin.
+
+    The (program, term, label) triple is a distinct org unit; labels may repeat
+    across terms.
+    """
+    program = await _get_or_404(session, program_id)
+    if program.type != "program":
+        raise HTTPException(status_code=422, detail="Sections are created under a program.")
+    if program.status != "active":
+        raise HTTPException(
+            status_code=409, detail="Cannot create sections under a deactivated program."
+        )
+    code = f"{term_code}-{label}"
+    path = f"{program.path}.{_label(code)}"
+    if await dao.path_exists(session, path):
+        raise HTTPException(
+            status_code=409, detail=f"Section '{label}' already exists for {term_code}."
+        )
+    section = OrgUnit(
+        type="section",
+        name=label,
+        code=code,
+        parent_id=program.id,
+        path=path,
+        campus_code=program.campus_code,
+        term_code=term_code,
+    )
+    session.add(section)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.section.created",
+        object_type="org_unit",
+        object_id=str(section.id),
+        scope=section.path,
+        after=_snapshot(section),
+    )
+    await session.commit()
+    return section
