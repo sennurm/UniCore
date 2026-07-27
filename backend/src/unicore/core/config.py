@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql+asyncpg://unicore:unicore@localhost:5432/unicore"
     redis_url: str = "redis://localhost:6379/0"
+    cors_origins: list[str] = ["http://localhost:3000"]
 
     @property
     def sync_database_url(self) -> str:

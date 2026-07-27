@@ -183,6 +183,10 @@ async def get_unit_paths(
     return await dao.paths_for_ids(session, unit_ids)
 
 
+async def get_root(session: AsyncSession) -> OrgUnit | None:
+    return await dao.get_root(session)
+
+
 async def get_unit(session: AsyncSession, unit_id: uuid.UUID) -> OrgUnit:
     return await _get_or_404(session, unit_id)
 

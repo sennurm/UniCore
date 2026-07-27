@@ -63,6 +63,15 @@ async def reparent_unit(
     )
 
 
+@router.get("/root", response_model=OrgUnitOut | None)
+async def get_root(
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("org:read")),
+) -> OrgUnitOut | None:
+    root = await service.get_root(session)
+    return OrgUnitOut.model_validate(root) if root else None
+
+
 @router.get("/units/{unit_id}", response_model=OrgUnitOut)
 async def get_unit(
     unit_id: uuid.UUID,

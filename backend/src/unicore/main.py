@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.resources import Resource
@@ -42,6 +43,13 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     for module_router in MODULE_ROUTERS:
         app.include_router(module_router)
+
+    app.add_middleware(  # outermost: preflight handled before the auth gate
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_methods=["*"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
 
     FastAPIInstrumentor.instrument_app(app)
 

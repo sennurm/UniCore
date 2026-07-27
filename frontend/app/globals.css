@@ -1,0 +1,31 @@
+:root {
+  --bg: #f6f7f9;
+  --panel: #ffffff;
+  --border: #d9dee5;
+  --text: #1c2733;
+  --muted: #5b6b7c;
+  --accent: #14532d;
+  --danger: #b91c1c;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+h1 { font-size: 1.4rem; } h2 { font-size: 1.1rem; margin-top: 1.6rem; }
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+label { display: block; font-size: 0.85rem; color: var(--muted); margin: 8px 0 2px; }
+input, select { width: 100%; max-width: 360px; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 0.95rem; }
+button { margin-top: 12px; padding: 8px 16px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; font-size: 0.95rem; cursor: pointer; }
+button.secondary { background: #e2e8f0; color: var(--text); }
+table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.error { color: var(--danger); margin-top: 8px; }
+nav { display: flex; gap: 16px; padding: 12px 24px; background: var(--panel); border-bottom: 1px solid var(--border); }
+nav a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.tree { list-style: none; padding-left: 18px; }
+.tree button { margin: 2px 0; padding: 2px 8px; background: transparent; color: var(--accent); border: 1px solid var(--border); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; background: #e2e8f0; font-size: 0.75rem; margin-left: 6px; }

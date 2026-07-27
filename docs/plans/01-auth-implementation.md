@@ -1,6 +1,6 @@
 # Implementation Plan — Milestone 1: Users, Authentication & Authorization (AUTH)
 
-Status: PROPOSED — pending sign-off · Created: 25-07-2026
+Status: IMPLEMENTED (Phases 0–6, 25-07-2026) — deferred: step-up re-auth (ships with QPG paper release), FIDO2 (post-MVP), reporting-chain edit UI (config is migration-seeded; CRUD arrives with LVE) · Created: 25-07-2026
 Source requirements: [01-authentication-authorization-security.md](../../requirements/01-authentication-authorization-security.md) (+ role registry sourced from `requirements/sources/module_access_matrix.xlsx`)
 
 ## 1. Locked stack decisions (25-07-2026)
