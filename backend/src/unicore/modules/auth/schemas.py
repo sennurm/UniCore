@@ -11,7 +11,12 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    challenge_id: uuid.UUID
+    """Two-stage default: challenge_id set, complete via /auth/otp/verify.
+    OTP disabled (dev only): token + force_password_change set directly."""
+
+    challenge_id: uuid.UUID | None = None
+    token: str | None = None
+    force_password_change: bool | None = None
     message: str = "OTP sent to your registered contact."
 
 

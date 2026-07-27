@@ -158,3 +158,34 @@ async def test_otp_flood_throttled(make_client) -> None:
             statuses.append(response.status_code)
     assert statuses[:5] == [200] * 5
     assert statuses[5] == 429
+
+
+async def test_otp_disabled_issues_session_directly(make_client, monkeypatch) -> None:
+    """UNICORE_OTP_LOGIN_ENABLED=false (dev only): password stage returns a session."""
+    from unicore.core.config import get_settings
+
+    async with make_client("system-admin") as admin:
+        await _provision(admin)
+        password = _temp_password()
+        monkeypatch.setattr(get_settings(), "otp_login_enabled", False)
+        login = await admin.post(
+            "/auth/login", json={"username": USER["username"], "password": password}
+        )
+        assert login.status_code == 200
+        body = login.json()
+        assert body["challenge_id"] is None
+        assert body["token"]
+        me = await admin.get(
+            "/auth/me", headers={"Authorization": f"Bearer {body['token']}"}
+        )
+        assert me.status_code == 200
+    assert not sms_provider.outbox or "OTP" not in sms_provider.outbox[-1].body
+
+
+def test_otp_cannot_be_disabled_in_production() -> None:
+    import pytest as _pytest
+
+    from unicore.core.config import Settings
+
+    with _pytest.raises(ValueError, match="cannot be disabled in production"):
+        Settings(environment="production", otp_login_enabled=False)

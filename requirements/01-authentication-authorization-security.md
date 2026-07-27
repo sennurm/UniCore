@@ -125,7 +125,7 @@ Central append-only audit service. Every module writes: actor, action, object, s
 ## 7. Functional Requirements
 
 - AUTH-FR-01: Provisioned-only account creation (bulk import or admin action); no self-registration.
-- AUTH-FR-02: Password + OTP login; OTP via SMS primary, email fallback; policies as per §4.
+- AUTH-FR-02: Password + OTP login; OTP via SMS primary, email fallback; policies as per §4. (Implementation note 25-07-2026: a dev/test-only environment flag can skip the OTP stage; the application fails to start with the flag off in production — OTP remains mandatory.)
 - AUTH-FR-03: Password reset via OTP to registered contact; resets audited.
 - AUTH-FR-04: RBAC with scoped, time-bound grants; permission = union of grants; deny by default.
 - AUTH-FR-05: Scope-aware permission check API used by all modules (single enforcement library — no module rolls its own). **Deny by default at the transport layer (locked 25-07-2026):** every endpoint requires a valid session token via a global gate with an explicit public allowlist, plus a per-endpoint role+scope permission declaration; data access is scope-filtered in the query so responses can never contain another user's data.

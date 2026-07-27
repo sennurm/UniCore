@@ -20,11 +20,19 @@ export default function LoginPage() {
     e.preventDefault();
     setError("");
     try {
-      const res = await api<{ challenge_id: string }>("/auth/login", {
-        method: "POST",
-        body: { username, password },
-      });
-      setChallengeId(res.challenge_id);
+      const res = await api<{
+        challenge_id: string | null;
+        token: string | null;
+        force_password_change: boolean | null;
+      }>("/auth/login", { method: "POST", body: { username, password } });
+      if (res.token) {
+        // OTP disabled in this environment: session issued directly.
+        setToken(res.token);
+        if (res.force_password_change) setStage("force-change");
+        else router.push("/dashboard");
+        return;
+      }
+      setChallengeId(res.challenge_id ?? "");
       setStage("otp");
     } catch (err) {
       setError(String((err as Error).message));

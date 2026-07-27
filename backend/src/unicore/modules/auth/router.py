@@ -47,8 +47,14 @@ def _ctx(request: Request) -> AuthContext:
 async def login(
     payload: LoginRequest, session: AsyncSession = Depends(get_session)
 ) -> LoginResponse:
-    challenge_id = await service.login(session, payload.username, payload.password)
-    return LoginResponse(challenge_id=challenge_id)
+    result = await service.login(session, payload.username, payload.password)
+    if result.token is not None:
+        return LoginResponse(
+            token=result.token,
+            force_password_change=result.force_password_change,
+            message="Signed in (OTP disabled in this environment).",
+        )
+    return LoginResponse(challenge_id=result.challenge_id)
 
 
 @router.post("/otp/verify", response_model=SessionResponse)

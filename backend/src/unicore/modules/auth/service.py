@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from unicore.core.config import get_settings
 from unicore.core.logging import get_logger
 from unicore.core.redis import get_redis
 from unicore.core.security import AuthContext, InvalidTokenError
@@ -73,8 +74,23 @@ async def set_temp_password(session: AsyncSession, ctx: AuthContext, user_id: uu
     return channel
 
 
-async def login(session: AsyncSession, username: str, password: str) -> uuid.UUID:
-    """Password stage. On success issues an OTP challenge and returns its id."""
+class LoginResult:
+    """Either an OTP challenge to complete, or (OTP disabled) a ready session."""
+
+    def __init__(
+        self,
+        challenge_id: uuid.UUID | None = None,
+        token: str | None = None,
+        force_password_change: bool | None = None,
+    ) -> None:
+        self.challenge_id = challenge_id
+        self.token = token
+        self.force_password_change = force_password_change
+
+
+async def login(session: AsyncSession, username: str, password: str) -> LoginResult:
+    """Password stage. Issues an OTP challenge — or, when OTP login is disabled
+    (dev/test only; production refuses to start that way), a session directly."""
     from unicore.modules.user import service as user_service
 
     user = await user_service.get_by_username(session, username)
@@ -103,12 +119,20 @@ async def login(session: AsyncSession, username: str, password: str) -> uuid.UUI
         raise HTTPException(status_code=401, detail="Invalid credentials.") from None
     await r.delete(f"fails:{user.id}")
 
+    if not get_settings().otp_login_enabled:
+        get_logger().warning("otp login disabled — issuing session from password stage")
+        token = await _create_session(session, user.id)
+        await session.commit()
+        return LoginResult(token=token, force_password_change=user.force_password_change)
+
     issued = await r.incr(f"otprate:{user.id}")
     await r.expire(f"otprate:{user.id}", 3600)
     if issued > OTP_RATE_LIMIT_PER_HOUR:
         raise HTTPException(status_code=429, detail="Too many OTP requests. Try later.")
 
-    return await _issue_otp(session, user.id, "login", user.mobile, user.email)
+    return LoginResult(
+        challenge_id=await _issue_otp(session, user.id, "login", user.mobile, user.email)
+    )
 
 
 async def _issue_otp(
