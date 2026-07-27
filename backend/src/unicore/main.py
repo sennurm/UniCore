@@ -8,6 +8,7 @@ from unicore.core.config import get_settings
 from unicore.core.health import router as health_router
 from unicore.core.logging import configure_logging
 from unicore.core.middleware import access_log_middleware, install_error_envelope
+from unicore.core.security import auth_gate_middleware
 from unicore.modules.audit.router import router as audit_router
 from unicore.modules.auth.router import router as auth_router
 from unicore.modules.org.router import router as org_router
@@ -31,6 +32,9 @@ def create_app() -> FastAPI:
     _configure_tracing(settings.service_name)
 
     app = FastAPI(title="UniCore", version="0.1.0")
+    # Middleware order: later registrations wrap earlier ones, so the access log
+    # is outermost and records auth-gate rejections too.
+    app.middleware("http")(auth_gate_middleware)
     app.middleware("http")(access_log_middleware)
     install_error_envelope(app)
     app.include_router(health_router)

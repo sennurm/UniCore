@@ -61,6 +61,30 @@ the same names and rules.
 Rules 1–3 are enforced by `tests/test_architecture.py` — CI fails on a
 violating import, so the boundaries cannot rot silently.
 
+## API security rule (project-level, locked 25-07-2026)
+
+**Every API call must present a valid session token and pass a role+scope
+permission check; responses must never contain data outside the caller's
+scope.** Concretely:
+
+1. **Deny by default:** `core/security.py` installs an authentication gate as
+   ASGI middleware, so every route — present and future — rejects requests
+   without a valid bearer token (401). Public endpoints are an explicit
+   allowlist (`/health`; docs endpoints in dev only). The gate fails closed
+   when no token verifier is registered.
+2. **Role check on every endpoint:** each non-public path operation declares
+   `rbac.service.require_permission("<action>")` as a dependency. Endpoints
+   without it don't pass review; the permission engine evaluates role AND
+   org-unit scope (AUTH-FR-04/05).
+3. **No cross-user data leakage:** DAOs take the caller's scope as an explicit
+   parameter and filter in the query — never fetch-then-filter in Python;
+   response schemas expose only fields the endpoint's audience may see; "own
+   data" endpoints (`/me/...`) resolve the subject from the AuthContext, never
+   from a client-supplied id.
+4. **Tests prove it:** `tests/test_security.py` walks every registered route
+   and fails if one responds without a token; every module must ship
+   access-denial and scope-filtering test cases (the TC-*-Access rows).
+
 ## Other conventions
 
 - **Permission checks:** every router uses the `rbac` permission dependency

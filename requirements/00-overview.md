@@ -72,7 +72,7 @@ Students · teaching staff in five grades (Professor, Associate Professor, Assis
 ## 6. Cross-cutting locked decisions
 
 1. **Identity:** own identity store; username/password + OTP second factor. No SSO in MVP. See AUTH doc.
-2. **Authorization:** RBAC + org-unit scoping everywhere. Each module doc carries its own per-action authorization matrix.
+2. **Authorization:** RBAC + org-unit scoping everywhere. Each module doc carries its own per-action authorization matrix. **Every API call is authenticated (valid session token) and authorized (role + scope) — deny by default, public endpoints are an explicit allowlist; responses are scope-filtered at the query level so no cross-user data can leak** (locked 25-07-2026; enforced structurally, see backend/ARCHITECTURE.md).
 3. **Attendance anti-fraud stack (all four):** rotating QR (15–30 s expiry) + one registered device per student + geofence/proximity check + faculty count verification before session close.
 4. **Corrections discipline:** captured attendance is modified only by the Class In-charge, with a mandatory reason, fully audited.
 5. **Promotion:** a per-School configurable workflow engine over system-computed eligibility inputs; thresholds (e.g., 75% attendance) are School-configurable, not hardcoded.

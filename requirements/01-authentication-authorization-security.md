@@ -128,7 +128,7 @@ Central append-only audit service. Every module writes: actor, action, object, s
 - AUTH-FR-02: Password + OTP login; OTP via SMS primary, email fallback; policies as per §4.
 - AUTH-FR-03: Password reset via OTP to registered contact; resets audited.
 - AUTH-FR-04: RBAC with scoped, time-bound grants; permission = union of grants; deny by default.
-- AUTH-FR-05: Scope-aware permission check API used by all modules (single enforcement library — no module rolls its own).
+- AUTH-FR-05: Scope-aware permission check API used by all modules (single enforcement library — no module rolls its own). **Deny by default at the transport layer (locked 25-07-2026):** every endpoint requires a valid session token via a global gate with an explicit public allowlist, plus a per-endpoint role+scope permission declaration; data access is scope-filtered in the query so responses can never contain another user's data.
 - AUTH-FR-06: Student single-device registration with approval-based change flow and device history.
 - AUTH-FR-07: Session issuance, refresh, revocation; immediate revocation on deactivation; step-up re-auth for designated sensitive actions.
 - AUTH-FR-08: Central append-only audit service with 7-year retention and scoped read access.

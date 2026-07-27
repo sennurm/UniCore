@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 UniCore is in the **requirements phase** — no source code or build tooling exists yet. Detailed module requirements live in `requirements/` (start with `requirements/00-overview.md`). Implementation begins only after the user approves those documents. Before implementing any feature, read the corresponding requirements doc; before making changes that would result in code, run the SME requirement clarification pass first.
 
+## Engineering Rules (project-level)
+
+- **API security (locked 25-07-2026):** every API endpoint requires a valid session token AND a role+scope permission check; deny by default. The auth gate is ASGI middleware in `backend/src/unicore/core/security.py` (public endpoints are an explicit allowlist); every non-public endpoint must declare `rbac.service.require_permission("<action>")`. No cross-user data leakage: DAOs filter by the caller's scope in the query, response schemas expose only audience-appropriate fields, and "own data" endpoints resolve the subject from the AuthContext — never a client-supplied id. `tests/test_security.py` fails CI if any route responds without a token. See backend/ARCHITECTURE.md.
+- **Logging:** the logging-standard skill is mandatory for any code that logs or adds endpoints/DB/AI calls.
+- **Module boundaries:** vertical slices under `src/unicore/modules/`; router→service→dao→models one-way; cross-module access service-to-service only (enforced by tests/test_architecture.py).
+
 ## Application Context (maintained by the SME clarifier)
 
 ### Field / Domain

@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from opentelemetry import trace
 
 from unicore.core.logging import get_logger
+from unicore.core.security import pseudonymous_user_id
 
 
 async def access_log_middleware(
@@ -19,9 +20,15 @@ async def access_log_middleware(
     start = time.monotonic()
     response = await call_next(request)
     duration_ms = int((time.monotonic() - start) * 1000)
+    # Contextvars bound in inner middleware don't propagate back up across the
+    # BaseHTTPMiddleware task boundary, so read the caller from request.state
+    # (backed by the shared ASGI scope) for the request-scoped user_id field.
+    auth = getattr(request.state, "auth", None)
+    user_field = {"user_id": pseudonymous_user_id(auth.user_id)} if auth else {}
     get_logger().info(
         "http request completed",
         duration_ms=duration_ms,
+        **user_field,
         **{
             "http.request.method": request.method,
             "http.route": request.url.path,
