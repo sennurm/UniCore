@@ -38,6 +38,31 @@ export function downloadUrl(path: string): string {
   return `${BASE}${path}`;
 }
 
+/**
+ * Download a file from an authenticated endpoint.
+ * A plain <a href> cannot carry the Authorization header, so every protected
+ * download must go through fetch + blob (project security rule: no endpoint is
+ * public just to make a link work).
+ */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(`${BASE}${path}`, { headers });
+  if (!response.ok) {
+    throw new ApiError(response.status, `Download failed (${response.status})`);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export async function api<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api, downloadUrl, upload } from "@/lib/api";
+import { api, downloadFile, upload } from "@/lib/api";
 import TemplateLinks from "@/components/TemplateLinks";
 
 type Batch = {
@@ -171,9 +171,17 @@ export default function OnboardingPage() {
                   {b.rows_rejected > 0 && (
                     <>
                       <button className="btn btn-ghost" onClick={() => void openErrors(b)}>Errors</button>
-                      <a className="btn btn-ghost" href={downloadUrl(`/onboarding/imports/${b.id}/errors.csv`)}>
+                      <button
+                        className="btn btn-ghost"
+                        onClick={() =>
+                          void downloadFile(
+                            `/onboarding/imports/${b.id}/errors.csv`,
+                            `errors_${b.id}.csv`,
+                          ).catch((err) => setError(String((err as Error).message)))
+                        }
+                      >
                         CSV
-                      </a>
+                      </button>
                     </>
                   )}
                   <button className="btn btn-ghost" onClick={() => void deliver(b)}>Deliver</button>

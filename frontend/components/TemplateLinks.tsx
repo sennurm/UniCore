@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { api, downloadUrl } from "@/lib/api";
+import { api, downloadFile } from "@/lib/api";
 
 type Template = {
   key: string;
@@ -13,6 +13,7 @@ type Template = {
 /** Download strip for CSV upload templates. Pass `only` to show one. */
 export default function TemplateLinks({ only }: { only?: string[] }) {
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     api<Template[]>("/templates")
@@ -32,9 +33,16 @@ export default function TemplateLinks({ only }: { only?: string[] }) {
               <td style={{ width: 170 }}><strong>{t.title}</strong></td>
               <td className="card-meta" style={{ display: "table-cell" }}>{t.description}</td>
               <td style={{ width: 130, textAlign: "right" }}>
-                <a className="btn btn-secondary" href={downloadUrl(t.download_url)}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() =>
+                    void downloadFile(t.download_url, `unicore_${t.key}_template.csv`).catch(
+                      (err) => setError(String((err as Error).message)),
+                    )
+                  }
+                >
                   Download CSV
-                </a>
+                </button>
               </td>
             </tr>
           ))}
@@ -44,6 +52,7 @@ export default function TemplateLinks({ only }: { only?: string[] }) {
         Each template carries the header row, one example row, and notes on required fields and
         formats. Comment lines starting with # are ignored on upload.
       </p>
+      {error && <p className="error">{error}</p>}
     </div>
   );
 }
