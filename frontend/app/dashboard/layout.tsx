@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { api, getToken, setToken } from "@/lib/api";
+import { api, getToken, setToken, validateSession } from "@/lib/api";
 
 const NAV = [
   { num: "01", label: "Org structure", href: "/dashboard" },
@@ -31,14 +31,33 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [ready, setReady] = useState(false);
   const [me, setMe] = useState<Me | null>(null);
 
-  // Auth guard: no session token -> straight to sign-in, never a raw API error.
+  // Auth guard. A token in localStorage proves nothing — it may be expired or
+  // revoked (deactivation kills sessions server-side), so validate it with the
+  // server before rendering anything. An invalid session lands on /login rather
+  // than a half-rendered dashboard full of failed requests.
   useEffect(() => {
+    let cancelled = false;
     if (!getToken()) {
       router.replace("/login");
       return;
     }
-    setReady(true);
-    api<Me>("/auth/me").then(setMe).catch(() => undefined);
+    void (async () => {
+      const valid = await validateSession();
+      if (cancelled) return;
+      if (!valid) {
+        router.replace("/login");
+        return;
+      }
+      setReady(true);
+      api<Me>("/auth/me")
+        .then((data) => {
+          if (!cancelled) setMe(data);
+        })
+        .catch(() => undefined);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [router]);
 
   if (!ready) return null;

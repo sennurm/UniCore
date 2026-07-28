@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api, setToken } from "@/lib/api";
 
@@ -15,6 +15,11 @@ export default function LoginPage() {
   const [code, setCode] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [error, setError] = useState("");
+
+  // Arriving here means the previous session is gone (or never existed).
+  useEffect(() => {
+    setToken(null);
+  }, []);
 
   async function submitPassword(e: React.FormEvent) {
     e.preventDefault();
