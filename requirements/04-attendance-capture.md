@@ -184,6 +184,8 @@ Every Session open/close, pending-scan resolution, manual mark, correction, and 
 
 ## 11. Open Questions
 
+- **Scan-risk score (from the Smart-Attendance reference port, 27-07-2026):** should faculty see `pending-verification` scans ranked by a non-biometric confidence score (token freshness, proximity result, timing anomalies) with flags, instead of the current unranked list? And if so, is the score persisted for audit or computed transiently for data minimization? Analysis in [docs/plans/reference-smart-attendance-port.md](../docs/plans/reference-smart-attendance-port.md); decide in the ATT milestone's SME pass before building.
+
 - Should the never-opened-Period flag also auto-notify the assigned Faculty Member before escalating to the HoD (e.g., 30 min after Period end)? Proposed: yes.
 - Exact Wi-Fi attestation mechanism (network egress check vs on-device SSID match)? Egress check preferred — no SSID data leaves the device. Needs IT-cell confirmation.
 - Should `late` be reportable separately to PRM (distinct from present) even when it counts toward presence? Proposed: store distinctly, report configurably.
