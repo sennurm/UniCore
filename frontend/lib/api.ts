@@ -16,6 +16,28 @@ export class ApiError extends Error {
   }
 }
 
+export async function upload<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const response = await fetch(`${BASE}${path}`, { method: "POST", headers, body: form });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const data = await response.json();
+      detail = data.detail ?? data.error?.message ?? detail;
+    } catch {
+      /* keep statusText */
+    }
+    throw new ApiError(response.status, detail);
+  }
+  return (await response.json()) as T;
+}
+
+export function downloadUrl(path: string): string {
+  return `${BASE}${path}`;
+}
+
 export async function api<T>(
   path: string,
   options: { method?: string; body?: unknown } = {},

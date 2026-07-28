@@ -1,0 +1,246 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { api, downloadUrl, upload } from "@/lib/api";
+
+type Batch = {
+  id: string;
+  filename: string;
+  term_code: string;
+  status: string;
+  rows_total: number;
+  rows_created: number;
+  rows_updated: number;
+  rows_unchanged: number;
+  rows_rejected: number;
+  created_at: string;
+};
+
+type RowError = { row_number: number; field: string; reason: string; raw_row: string };
+
+type RosterRow = {
+  user_id: string;
+  erp_id: string | null;
+  full_name: string;
+  status: string;
+  roll_number: string | null;
+  credential_delivery: string | null;
+};
+
+const DELIVERY_TAG: Record<string, string> = {
+  delivered: "tag tag-accent",
+  pending: "tag tag-neutral",
+  failed: "tag tag-outline",
+};
+
+export default function OnboardingPage() {
+  const [batches, setBatches] = useState<Batch[]>([]);
+  const [termCode, setTermCode] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [selected, setSelected] = useState<Batch | null>(null);
+  const [errors, setErrors] = useState<RowError[] | null>(null);
+  const [sectionId, setSectionId] = useState("");
+  const [roster, setRoster] = useState<RosterRow[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  const loadBatches = useCallback(async () => {
+    try {
+      setBatches(await api<Batch[]>("/onboarding/imports"));
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadBatches();
+  }, [loadBatches]);
+
+  async function submitImport(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      const form = new FormData();
+      form.append("term_code", termCode);
+      form.append("file", file);
+      const batch = await upload<Batch>("/onboarding/imports", form);
+      setMessage(
+        `${batch.rows_created} created · ${batch.rows_updated} updated · ` +
+          `${batch.rows_unchanged} unchanged · ${batch.rows_rejected} rejected`,
+      );
+      await loadBatches();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openErrors(batch: Batch) {
+    setSelected(batch);
+    setErrors(await api<RowError[]>(`/onboarding/imports/${batch.id}/errors`));
+  }
+
+  async function deliver(batch: Batch) {
+    setError("");
+    try {
+      const result = await api<{ delivered: number; failed: number }>(
+        `/onboarding/imports/${batch.id}/deliver-credentials`,
+        { method: "POST" },
+      );
+      setMessage(`Credentials delivered: ${result.delivered}, failed: ${result.failed}`);
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  async function loadRoster(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      setRoster(await api<RosterRow[]>(`/onboarding/sections/${sectionId}/roster`));
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  return (
+    <div className="uc-screen">
+      <div>
+        <h3 style={{ margin: 0 }}>Student import</h3>
+        <div className="uc-screen-sub">
+          Import-only provisioning from the ERP · valid rows commit, invalid rows go to the error
+          report
+        </div>
+      </div>
+
+      <div className="card" style={{ maxWidth: 460 }}>
+        <div className="card-kicker">Upload CSV</div>
+        <form onSubmit={submitImport}>
+          <div className="field">
+            <label>Term code (e.g. 2026-S1)</label>
+            <input className="input" value={termCode} onChange={(e) => setTermCode(e.target.value)} required />
+          </div>
+          <div className="field">
+            <label>CSV file — schema v1</label>
+            <input className="input" type="file" accept=".csv,text/csv"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={busy || !file}>
+            {busy ? "Importing…" : "Import"}
+          </button>
+        </form>
+        <p className="card-meta" style={{ marginTop: 8 }}>
+          Columns: erp_id, full_name, date_of_birth (DD-MM-YYYY), gender, mobile, email,
+          program_code, section_label, admission_year, roll_number
+        </p>
+        {message && <p className="card-meta">{message}</p>}
+      </div>
+
+      <div className="card">
+        <div className="card-kicker">Batches</div>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>File</th><th>Term</th><th>Status</th>
+              <th>Created</th><th>Updated</th><th>Unchanged</th><th>Rejected</th><th />
+            </tr>
+          </thead>
+          <tbody>
+            {batches.map((b) => (
+              <tr key={b.id}>
+                <td>{b.filename}</td>
+                <td>{b.term_code}</td>
+                <td>
+                  <span className={b.status === "committed" ? "tag tag-accent" : "tag tag-outline"}>
+                    {b.status}
+                  </span>
+                </td>
+                <td>{b.rows_created}</td>
+                <td>{b.rows_updated}</td>
+                <td>{b.rows_unchanged}</td>
+                <td>{b.rows_rejected}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  {b.rows_rejected > 0 && (
+                    <>
+                      <button className="btn btn-ghost" onClick={() => void openErrors(b)}>Errors</button>
+                      <a className="btn btn-ghost" href={downloadUrl(`/onboarding/imports/${b.id}/errors.csv`)}>
+                        CSV
+                      </a>
+                    </>
+                  )}
+                  <button className="btn btn-ghost" onClick={() => void deliver(b)}>Deliver</button>
+                </td>
+              </tr>
+            ))}
+            {batches.length === 0 && (
+              <tr><td colSpan={8} className="card-meta">No imports yet.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {selected && errors && (
+        <div className="card">
+          <div className="card-kicker">Error report · {selected.filename}</div>
+          <table className="table">
+            <thead>
+              <tr><th>Row</th><th>Field</th><th>Reason</th><th>Raw row</th></tr>
+            </thead>
+            <tbody>
+              {errors.map((e, i) => (
+                <tr key={i}>
+                  <td>{e.row_number}</td>
+                  <td><span className="tag tag-outline">{e.field}</span></td>
+                  <td>{e.reason}</td>
+                  <td style={{ fontSize: 11, opacity: 0.6 }}>{e.raw_row}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div className="card">
+        <div className="card-kicker">Section roster</div>
+        <form onSubmit={loadRoster} style={{ display: "flex", gap: 12, alignItems: "flex-end", maxWidth: 520 }}>
+          <div className="field" style={{ flex: 1, marginBottom: 0 }}>
+            <label>Section org-unit id</label>
+            <input className="input" value={sectionId} onChange={(e) => setSectionId(e.target.value)} required />
+          </div>
+          <button className="btn btn-secondary" type="submit">Load</button>
+        </form>
+        {roster && (
+          <table className="table" style={{ marginTop: 12 }}>
+            <thead>
+              <tr><th>Roll</th><th>Name</th><th>ERP id</th><th>Account</th><th>Credentials</th></tr>
+            </thead>
+            <tbody>
+              {roster.map((r) => (
+                <tr key={r.user_id}>
+                  <td>{r.roll_number ?? "—"}</td>
+                  <td>{r.full_name}</td>
+                  <td>{r.erp_id ?? "—"}</td>
+                  <td><span className="tag tag-neutral">{r.status}</span></td>
+                  <td>
+                    <span className={DELIVERY_TAG[r.credential_delivery ?? "pending"]}>
+                      {r.credential_delivery ?? "—"}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+              {roster.length === 0 && (
+                <tr><td colSpan={5} className="card-meta">No students in this Section today.</td></tr>
+              )}
+            </tbody>
+          </table>
+        )}
+      </div>
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}

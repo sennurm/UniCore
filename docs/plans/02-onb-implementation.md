@@ -1,6 +1,6 @@
 # Implementation Plan — Milestone 2: Student Onboarding (ONB)
 
-Status: IN PROGRESS · Created: 27-07-2026
+Status: IMPLEMENTED (Phases 1–5, 27-07-2026) — deferred: ERP API feed adapter, ERP grievance round-trip (ONB-FR-13), 20k-row performance run (NFR) · Created: 27-07-2026
 Source requirements: [02-student-onboarding.md](../../requirements/02-student-onboarding.md),
 plus the TTM slice [03-timetable-management.md](../../requirements/03-timetable-management.md) TTM-FR-18/19
 
