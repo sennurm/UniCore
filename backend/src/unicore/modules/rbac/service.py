@@ -11,6 +11,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import cast
 
 from fastapi import HTTPException, Request
 from sqlalchemy.exc import IntegrityError
@@ -53,6 +54,7 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "onb:allot": ("super-admin", "system-admin", "office-staff"),
     "onb:transfer": ("super-admin", "system-admin"),
     "onb:withdraw": ("super-admin", "system-admin", "office-staff"),
+    "rbac:bulk-roles": ("super-admin", "system-admin"),
 }
 
 # Who may issue a given role (AUTH §4 matrix). Default: admins only.
@@ -501,3 +503,180 @@ async def resolve_reporting(session: AsyncSession, user_id: uuid.UUID) -> list[d
             }
         )
     return results
+
+
+# --- user + role directory (combined Users & roles screen) -------------------
+
+ROLES_CSV_COLUMNS = ("username", "full_name", "kind", "status", "roles")
+_ROLE_SEPARATOR = ";"
+
+
+def _format_grant(role_code: str, unit_path: str | None) -> str:
+    """`role@unit.path`, or bare `role` for university-scope grants."""
+    return f"{role_code}@{unit_path}" if unit_path else role_code
+
+
+def parse_role_spec(spec: str) -> tuple[str, str | None]:
+    role_code, _, unit_path = spec.partition("@")
+    return role_code.strip(), (unit_path.strip() or None)
+
+
+async def directory(
+    session: AsyncSession,
+    *,
+    search: str | None = None,
+    role_code: str | None = None,
+    status: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, object]]:
+    """Users with their active grants — the combined Users & roles table."""
+    from unicore.modules.user import service as user_service
+
+    users = await user_service.list_users(session, search, status, limit)
+    rows: list[dict[str, object]] = []
+    for user in users:
+        grants = await dao.active_grants_for_user(session, user.id)
+        unit_ids = [g.org_unit_id for g, _ in grants if g.org_unit_id is not None]
+        paths = await org_service.get_unit_paths(session, unit_ids)
+        entries = [
+            {
+                "grant_id": str(g.id),
+                "role_code": g.role_code,
+                "org_unit_id": str(g.org_unit_id) if g.org_unit_id else None,
+                "unit_path": paths.get(g.org_unit_id) if g.org_unit_id else None,
+                "spec": _format_grant(
+                    g.role_code, paths.get(g.org_unit_id) if g.org_unit_id else None
+                ),
+            }
+            for g, _ in grants
+        ]
+        if role_code and not any(e["role_code"] == role_code for e in entries):
+            continue
+        rows.append(
+            {
+                "user_id": str(user.id),
+                "username": user.username,
+                "full_name": user.full_name,
+                "kind": user.kind,
+                "status": user.status,
+                "erp_id": user.erp_id,
+                "roles": entries,
+            }
+        )
+    return rows
+
+
+def directory_csv(rows: list[dict[str, object]]) -> str:
+    """Round-trip export: edit the roles column and upload the same file back."""
+    import csv as _csv
+    import io as _io
+
+    buffer = _io.StringIO()
+    buffer.write(
+        "# Edit the 'roles' column and upload this file back to apply role changes.\n"
+    )
+    buffer.write(
+        "# roles is a ';'-separated list of role@org_unit_path "
+        "(e.g. hod@uni.fet.soce.cse); university-scope roles need no @path.\n"
+    )
+    buffer.write(
+        "# Removing a role from the list REVOKES it; adding one ISSUES it. "
+        "username identifies the row and must not be changed.\n"
+    )
+    writer = _csv.writer(buffer)
+    writer.writerow(ROLES_CSV_COLUMNS)
+    for row in rows:
+        entries = cast(list[dict[str, object]], row["roles"])
+        specs = _ROLE_SEPARATOR.join(str(entry["spec"]) for entry in entries)
+        writer.writerow(
+            [row["username"], row["full_name"], row["kind"], row["status"], specs]
+        )
+    return buffer.getvalue()
+
+
+async def apply_roles_csv(
+    session: AsyncSession, ctx: AuthContext, content: bytes
+) -> dict[str, object]:
+    """Diff each row's roles against the user's current grants: issue what was
+    added, revoke what was removed. Every change goes through the same singleton,
+    scope and audit rules as a single grant — no bulk bypass."""
+    import csv as _csv
+    import io as _io
+
+    from unicore.modules.user import service as user_service
+
+    if not content:
+        raise HTTPException(status_code=422, detail="File is empty.")
+    try:
+        text_content = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
+
+    body = "\n".join(
+        line for line in text_content.splitlines() if not line.lstrip().startswith("#")
+    )
+    reader = _csv.DictReader(_io.StringIO(body))
+    missing = {"username", "roles"} - set(h.strip() for h in (reader.fieldnames or []))
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Header must include: {', '.join(sorted(missing))}.",
+        )
+
+    granted = revoked = unchanged = 0
+    errors: list[dict[str, object]] = []
+
+    for row_number, raw in enumerate(reader, start=2):
+        row = {k: (v or "").strip() for k, v in raw.items() if k}
+        username = row.get("username", "")
+        if not username:
+            continue
+        try:
+            user = await user_service.get_by_username(session, username)
+            if user is None:
+                raise ValueError(f"no user '{username}'")
+            desired = {
+                spec.strip() for spec in row.get("roles", "").split(_ROLE_SEPARATOR) if spec.strip()
+            }
+            current_grants = await dao.active_grants_for_user(session, user.id)
+            unit_ids = [g.org_unit_id for g, _ in current_grants if g.org_unit_id is not None]
+            paths = await org_service.get_unit_paths(session, unit_ids)
+            current = {
+                _format_grant(g.role_code, paths.get(g.org_unit_id) if g.org_unit_id else None): g
+                for g, _ in current_grants
+            }
+
+            for spec in desired - set(current):
+                role_code, unit_path = parse_role_spec(spec)
+                org_unit_id = None
+                if unit_path:
+                    unit = await org_service.get_unit_by_path(session, unit_path)
+                    if unit is None:
+                        raise ValueError(f"no org unit at path '{unit_path}'")
+                    org_unit_id = unit.id
+                await create_grant(
+                    session,
+                    ctx,
+                    GrantCreate(user_id=user.id, role_code=role_code, org_unit_id=org_unit_id),
+                )
+                granted += 1
+            for spec in set(current) - desired:
+                await revoke_grant(
+                    session, ctx, current[spec].id, reason="bulk role update (CSV)"
+                )
+                revoked += 1
+            if desired == set(current):
+                unchanged += 1
+        except (ValueError, HTTPException) as err:
+            detail = err.detail if isinstance(err, HTTPException) else str(err)
+            errors.append(
+                {"row_number": row_number, "username": username, "reason": str(detail)}
+            )
+
+    return {
+        "grants_issued": granted,
+        "grants_revoked": revoked,
+        "rows_unchanged": unchanged,
+        "rows_rejected": len(errors),
+        "errors": errors,
+    }

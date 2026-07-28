@@ -9,9 +9,8 @@ const NAV = [
   { num: "01", label: "Org structure", href: "/dashboard" },
   { num: "02", label: "Terms & sections", href: "/dashboard/terms" },
   { num: "03", label: "Student import", href: "/dashboard/onboarding" },
-  { num: "04", label: "Users", href: "/dashboard/users" },
-  { num: "05", label: "Roles & grants", href: "/dashboard/grants" },
-  { num: "06", label: "Audit log", href: "/dashboard/audit" },
+  { num: "04", label: "Users & roles", href: "/dashboard/users" },
+  { num: "05", label: "Audit log", href: "/dashboard/audit" },
 ];
 
 type Me = { user_id: string; username: string; full_name: string; roles: string[] };

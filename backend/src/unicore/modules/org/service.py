@@ -285,31 +285,28 @@ async def create_section_instance(
     return section
 
 
-# --- CSV import (Super Admin; same rules as the single-unit endpoint) ---------
+# --- CSV import: flat course catalogue (Super Admin) --------------------------
 
 MAX_ORG_FILE_BYTES = 5 * 1024 * 1024
-_DEPTH_ORDER = ("faculty_division", "school", "department", "program")
 
 
 async def import_csv(
     session: AsyncSession, ctx: AuthContext, filename: str, content: bytes
 ) -> dict[str, object]:
-    """Bulk org creation. Rows reference parents by dotted path and are processed
-    shallowest-first, so one file can build a whole subtree in any order.
-
-    Partial commit like the student import: valid rows land, invalid rows come back
-    as an error report. Existing units are never duplicated or deleted.
+    """One row per Programme, ancestors as columns. Missing Faculty Divisions,
+    Schools and Departments are created on the way down, so a catalogue export
+    imports without any hierarchy encoding. Partial commit: valid rows land,
+    invalid rows come back as an error report.
     """
     if not content:
         raise HTTPException(status_code=422, detail="File is empty.")
     if len(content) > MAX_ORG_FILE_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 5 MB limit.")
     try:
-        text_content = content.decode("utf-8")
+        text_content = content.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
 
-    # Tolerate the template's leading comment lines.
     body = "\n".join(
         line for line in text_content.splitlines() if not line.lstrip().startswith("#")
     )
@@ -323,36 +320,35 @@ async def import_csv(
             f"{', '.join(sorted(missing))}.",
         )
 
-    rows = [
-        (index, {k: (v or "").strip() for k, v in raw.items() if k})
-        for index, raw in enumerate(reader, start=2)
-    ]
-    # Shallowest first so parents exist before their children, whatever the file order.
-    rows.sort(key=lambda item: _DEPTH_ORDER.index(item[1].get("type", ""))
-              if item[1].get("type", "") in _DEPTH_ORDER else len(_DEPTH_ORDER))
+    root = await dao.get_root(session)
+    if root is None:
+        raise HTTPException(
+            status_code=409,
+            detail="No university exists yet — run bootstrap before importing structure.",
+        )
 
     created = updated = unchanged = 0
     errors: list[dict[str, object]] = []
 
-    for row_number, row in rows:
+    for row_number, raw in enumerate(reader, start=2):
+        row = {k: (v or "").strip() for k, v in raw.items() if k}
+        if not any(row.values()):
+            continue  # tolerate blank spacer rows
         try:
-            outcome = await _import_org_row(session, ctx, row)
+            outcome = await _import_catalogue_row(session, ctx, root, row)
         except _OrgRowError as err:
             errors.append(
                 {
                     "row_number": row_number,
                     "field": err.field,
                     "reason": err.reason,
-                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items()),
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items() if v),
                 }
             )
             continue
-        if outcome == "created":
-            created += 1
-        elif outcome == "updated":
-            updated += 1
-        else:
-            unchanged += 1
+        created += outcome["created"]
+        updated += outcome["updated"]
+        unchanged += outcome["unchanged"]
 
     await audit_service.record(
         session,
@@ -361,15 +357,15 @@ async def import_csv(
         object_type="org_import",
         object_id=filename,
         after={
-            "created": created,
-            "updated": updated,
-            "unchanged": unchanged,
-            "rejected": len(errors),
+            "units_created": created,
+            "units_updated": updated,
+            "units_unchanged": unchanged,
+            "rows_rejected": len(errors),
         },
     )
     await session.commit()
     return {
-        "rows_total": len(rows),
+        "rows_total": created + updated + unchanged + len(errors),
         "rows_created": created,
         "rows_updated": updated,
         "rows_unchanged": unchanged,
@@ -385,64 +381,105 @@ class _OrgRowError(Exception):
         super().__init__(f"{field}: {reason}")
 
 
-async def _import_org_row(
-    session: AsyncSession, ctx: AuthContext, row: dict[str, str]
-) -> str:
-    unit_type = row.get("type", "").strip().lower()
-    code = row.get("code", "").strip()
-    name = row.get("name", "").strip()
-    parent_path = row.get("parent_path", "").strip().lower()
+def _required(row: dict[str, str], field: str) -> str:
+    value = row.get(field, "").strip()
+    if not value:
+        raise _OrgRowError(field, "mandatory field is missing")
+    return value
 
-    if unit_type == "section":
-        raise _OrgRowError(
-            "type", "Sections are created per term by the Timetable Cell (TTM-FR-19)"
-        )
-    if unit_type not in _DEPTH_ORDER:
-        raise _OrgRowError("type", f"must be one of {', '.join(_DEPTH_ORDER)}")
-    if not code:
-        raise _OrgRowError("code", "mandatory field is missing")
-    if not name:
-        raise _OrgRowError("name", "mandatory field is missing")
-    if not parent_path:
-        raise _OrgRowError("parent_path", "mandatory for every non-university row")
 
-    parent = await dao.get_by_path(session, normalize_path(parent_path))
-    if parent is None:
-        raise _OrgRowError("parent_path", f"no org unit at path '{parent_path}'")
-    if parent.type != PARENT_TYPE_OF[unit_type]:
-        raise _OrgRowError(
-            "parent_path",
-            f"a {unit_type} must sit under a {PARENT_TYPE_OF[unit_type]}, not a {parent.type}",
-        )
-    if parent.status != "active":
-        raise _OrgRowError("parent_path", "parent is deactivated")
+async def _import_catalogue_row(
+    session: AsyncSession, ctx: AuthContext, root: OrgUnit, row: dict[str, str]
+) -> dict[str, int]:
+    """Walk University → Faculty Division → School → Department → Program,
+    creating or updating each level. Returns per-level counts."""
+    counts = {"created": 0, "updated": 0, "unchanged": 0}
+    parent = root
+    for unit_type, code_field, name_field in (
+        ("faculty_division", "faculty_division_code", "faculty_division_name"),
+        ("school", "school_code", "school_name"),
+        ("department", "department_code", "department_name"),
+        ("program", "programme_code", "programme_name"),
+    ):
+        code = _required(row, code_field)
+        name = _required(row, name_field)
+        attrs = _programme_attrs(row) if unit_type == "program" else {}
+        parent, outcome = await _upsert_unit(session, ctx, parent, unit_type, code, name, attrs)
+        counts[outcome] += 1
+    return counts
 
+
+def _programme_attrs(row: dict[str, str]) -> dict[str, object]:
+    from unicore.modules.org.schemas import PROGRAMME_LEVELS, PROGRAMME_MODES
+
+    level = row.get("level", "").strip()
+    mode = row.get("mode", "").strip()
+    duration = row.get("duration_years", "").strip()
+    if level and level not in PROGRAMME_LEVELS:
+        raise _OrgRowError("level", f"must be one of: {', '.join(PROGRAMME_LEVELS)}")
+    if mode and mode not in PROGRAMME_MODES:
+        raise _OrgRowError("mode", f"must be one of: {', '.join(PROGRAMME_MODES)}")
+    years: int | None = None
+    if duration:
+        try:
+            years = int(float(duration))
+        except ValueError:
+            raise _OrgRowError("duration_years", "must be a whole number of years") from None
+        if not 1 <= years <= 10:
+            raise _OrgRowError("duration_years", "outside the plausible range (1–10)")
+    return {"level": level or None, "duration_years": years, "mode": mode or None}
+
+
+async def _upsert_unit(
+    session: AsyncSession,
+    ctx: AuthContext,
+    parent: OrgUnit,
+    unit_type: str,
+    code: str,
+    name: str,
+    attrs: dict[str, object],
+) -> tuple[OrgUnit, str]:
     path = f"{parent.path}.{_label(code)}"
     existing = await dao.get_by_path(session, path)
     if existing is not None:
-        if existing.name == name:
-            return "unchanged"
+        if existing.type != unit_type:
+            raise _OrgRowError(
+                f"{unit_type}_code",
+                f"code '{code}' already exists here as a {existing.type}",
+            )
         before = _snapshot(existing)
-        existing.name = name
+        changed = False
+        if existing.name != name:
+            existing.name = name
+            changed = True
+        for key, value in attrs.items():
+            if value is not None and getattr(existing, key) != value:
+                setattr(existing, key, value)
+                changed = True
+        if not changed:
+            return existing, "unchanged"
         await audit_service.record(
             session,
             actor=ctx.user_id,
-            action="org.unit.renamed",
+            action="org.unit.updated",
             object_type="org_unit",
             object_id=str(existing.id),
             scope=existing.path,
             before=before,
             after=_snapshot(existing),
         )
-        return "updated"
+        return existing, "updated"
 
+    if parent.status != "active":
+        raise _OrgRowError(f"{unit_type}_code", "parent is deactivated")
     unit = OrgUnit(
         type=unit_type,
         name=name,
         code=code,
         parent_id=parent.id,
         path=path,
-        campus_code=row.get("campus_code") or parent.campus_code,
+        campus_code=parent.campus_code,
+        **attrs,
     )
     session.add(unit)
     await session.flush()
@@ -455,4 +492,75 @@ async def _import_org_row(
         scope=unit.path,
         after=_snapshot(unit),
     )
-    return "created"
+    return unit, "created"
+
+
+async def update_unit(
+    session: AsyncSession, ctx: AuthContext, unit_id: uuid.UUID, changes: dict[str, object]
+) -> OrgUnit:
+    """Inline edit from the org table. Code and parent are immutable here — both
+    are embedded in descendant paths (use reparent for moves)."""
+    unit = await _get_or_404(session, unit_id)
+    before = _snapshot(unit)
+    applied = False
+    for key in ("name", "level", "duration_years", "mode", "campus_code"):
+        if key in changes and changes[key] is not None and getattr(unit, key) != changes[key]:
+            if key != "name" and unit.type != "program":
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"{key} applies to Programmes only, not a {unit.type}.",
+                )
+            setattr(unit, key, changes[key])
+            applied = True
+    if not applied:
+        return unit
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.unit.updated",
+        object_type="org_unit",
+        object_id=str(unit.id),
+        scope=unit.path,
+        before=before,
+        after=_snapshot(unit),
+    )
+    await session.commit()
+    return unit
+
+
+async def reactivate_unit(
+    session: AsyncSession, ctx: AuthContext, unit_id: uuid.UUID
+) -> OrgUnit:
+    unit = await _get_or_404(session, unit_id)
+    if unit.status == "active":
+        return unit
+    parent = await dao.get_by_id(session, unit.parent_id) if unit.parent_id else None
+    if parent is not None and parent.status != "active":
+        raise HTTPException(
+            status_code=409, detail="Reactivate the parent unit first."
+        )
+    before = _snapshot(unit)
+    unit.status = "active"
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.unit.reactivated",
+        object_type="org_unit",
+        object_id=str(unit.id),
+        scope=unit.path,
+        before=before,
+        after=_snapshot(unit),
+    )
+    await session.commit()
+    return unit
+
+
+async def list_units(
+    session: AsyncSession,
+    unit_type: str | None,
+    search: str | None,
+    include_inactive: bool,
+    limit: int,
+) -> list[OrgUnit]:
+    """Flat, filterable listing powering the org table."""
+    return list(await dao.list_units(session, unit_type, search, include_inactive, limit))

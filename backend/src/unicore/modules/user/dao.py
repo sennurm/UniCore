@@ -1,8 +1,9 @@
 """Data access for the user module. All SQLAlchemy queries for its tables live here."""
 
 import uuid
+from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.modules.user.models import Grievance, User
@@ -34,5 +35,22 @@ async def list_grievances(
         query = query.where(Grievance.user_id == user_id)
     if status is not None:
         query = query.where(Grievance.status == status)
+    result = await session.execute(query)
+    return result.scalars().all()
+
+
+async def list_users(
+    session: AsyncSession, search: str | None, status: str | None, limit: int
+) -> Sequence[User]:
+    query = select(User).order_by(User.username).limit(limit)
+    if status:
+        query = query.where(User.status == status)
+    if search:
+        pattern = f"%{search.lower()}%"
+        query = query.where(
+            func.lower(User.username).like(pattern)
+            | func.lower(User.full_name).like(pattern)
+            | func.lower(func.coalesce(User.erp_id, "")).like(pattern)
+        )
     result = await session.execute(query)
     return result.scalars().all()

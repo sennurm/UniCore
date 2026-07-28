@@ -3,7 +3,7 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.modules.org.models import OrgUnit
@@ -83,6 +83,27 @@ async def find_section(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def list_units(
+    session: AsyncSession,
+    unit_type: str | None,
+    search: str | None,
+    include_inactive: bool,
+    limit: int,
+) -> Sequence[OrgUnit]:
+    query = select(OrgUnit).order_by(OrgUnit.path).limit(limit)
+    if unit_type:
+        query = query.where(OrgUnit.type == unit_type)
+    if not include_inactive:
+        query = query.where(OrgUnit.status == "active")
+    if search:
+        pattern = f"%{search.lower()}%"
+        query = query.where(
+            func.lower(OrgUnit.name).like(pattern) | func.lower(OrgUnit.code).like(pattern)
+        )
+    result = await session.execute(query)
+    return result.scalars().all()
 
 
 async def get_by_path(session: AsyncSession, path: str) -> OrgUnit | None:

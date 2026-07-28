@@ -4,7 +4,16 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import UserDefinedType
@@ -57,6 +66,10 @@ class OrgUnit(Base):
     )
     # Per-term Section instances only (TTM-FR-19); NULL for all other unit types.
     term_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Programme attributes (Program units only) — from the university course catalogue.
+    level: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    duration_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

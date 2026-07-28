@@ -1,156 +1,198 @@
-"""Bulk org-structure CSV import + upload templates."""
+"""Flat course-catalogue import, org table operations, and upload templates."""
 
 import httpx
 
+CATALOGUE = {
+    "faculty_division_code": "FET",
+    "faculty_division_name": "Faculty of Engineering & Technology",
+    "school_code": "SOCE",
+    "school_name": "School of Computational Engineering",
+    "department_code": "CSE",
+    "department_name": "Computer Science & Engineering",
+    "programme_code": "BT-CSE",
+    "programme_name": "B.Tech Computer Science & Engineering",
+    "level": "Under Graduate",
+    "duration_years": "4",
+    "mode": "Full-Time",
+}
 
-def _csv(rows: list[dict[str, str]], header: bool = True) -> bytes:
+
+def _csv(rows: list[dict[str, str]]) -> bytes:
     from unicore.modules.org.schemas import ORG_CSV_COLUMNS
 
-    lines = [",".join(ORG_CSV_COLUMNS)] if header else []
+    lines = [",".join(ORG_CSV_COLUMNS)]
     lines += [",".join(r.get(c, "") for c in ORG_CSV_COLUMNS) for r in rows]
     return ("\n".join(lines) + "\n").encode()
 
 
 async def _upload(client: httpx.AsyncClient, payload: bytes) -> httpx.Response:
-    return await client.post(
-        "/org/imports", files={"file": ("org.csv", payload, "text/csv")}
-    )
+    return await client.post("/org/imports", files={"file": ("org.csv", payload, "text/csv")})
 
 
-async def test_builds_tree_regardless_of_row_order(make_client) -> None:
-    """Children may appear before their parents — the importer sorts by depth."""
+async def _with_university(client: httpx.AsyncClient) -> None:
+    await client.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
+
+
+async def test_flat_row_creates_the_whole_branch(make_client) -> None:
+    """One Programme row creates its Faculty Division, School and Department too."""
     async with make_client("super-admin") as admin:
-        await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
-        # Deliberately deepest-first.
-        rows = [
-            {"type": "program", "code": "BT-CSE", "name": "BTech CSE",
-             "parent_path": "uni.fet.soce.cse"},
-            {"type": "department", "code": "CSE", "name": "Computer Science",
-             "parent_path": "uni.fet.soce"},
-            {"type": "school", "code": "SOCE", "name": "School of Computing",
-             "parent_path": "uni.fet"},
-            {"type": "faculty_division", "code": "FET", "name": "Engineering & Tech",
-             "parent_path": "uni"},
-        ]
-        result = (await _upload(admin, _csv(rows))).json()
-        assert (result["rows_created"], result["rows_rejected"]) == (4, 0)
+        await _with_university(admin)
+        result = (await _upload(admin, _csv([CATALOGUE]))).json()
+        assert result["rows_rejected"] == 0, result["errors"]
+        assert result["rows_created"] == 4  # FD + School + Dept + Programme
 
-        root = (await admin.get("/org/root")).json()
-        fet = (await admin.get(f"/org/units/{root['id']}/children")).json()[0]
-        soce = (await admin.get(f"/org/units/{fet['id']}/children")).json()[0]
-    assert fet["code"] == "FET"
-    assert soce["path"] == "uni.fet.soce"
+        units = (await admin.get("/org/units")).json()
+        by_code = {u["code"]: u for u in units}
+    assert by_code["FET"]["type"] == "faculty_division"
+    assert by_code["CSE"]["path"] == "uni.fet.soce.cse"
+    programme = by_code["BT-CSE"]
+    assert programme["level"] == "Under Graduate"
+    assert programme["duration_years"] == 4
+    assert programme["mode"] == "Full-Time"
 
 
-async def test_partial_commit_with_errors(make_client) -> None:
+async def test_shared_ancestors_created_once(make_client) -> None:
+    """Repeating the ancestor columns per row reuses them instead of duplicating."""
+    second = {**CATALOGUE, "programme_code": "MT-CSE", "programme_name": "M.Tech CSE",
+              "level": "Post Graduate", "duration_years": "2"}
+    third = {**CATALOGUE, "department_code": "AIDS", "department_name": "AI & Data Science",
+             "programme_code": "BT-AIDS", "programme_name": "B.Tech AI & DS"}
     async with make_client("super-admin") as admin:
-        await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
-        rows = [
-            {"type": "faculty_division", "code": "FET", "name": "Eng", "parent_path": "uni"},
-            {"type": "school", "code": "X", "name": "Nowhere", "parent_path": "uni.ghost"},
-            {"type": "department", "code": "D", "name": "Wrong parent", "parent_path": "uni"},
-            {"type": "section", "code": "3B", "name": "3B", "parent_path": "uni.fet"},
-            {"type": "school", "code": "", "name": "No code", "parent_path": "uni.fet"},
-        ]
-        result = (await _upload(admin, _csv(rows))).json()
-    assert result["rows_created"] == 1
-    assert result["rows_rejected"] == 4
-    reasons = {e["field"]: e["reason"] for e in result["errors"]}
-    parent_reason = reasons["parent_path"]
-    assert "no org unit at path" in parent_reason or "must sit under" in parent_reason
-    assert "Timetable Cell" in reasons["type"]
-    assert reasons["code"] == "mandatory field is missing"
+        await _with_university(admin)
+        result = (await _upload(admin, _csv([CATALOGUE, second, third]))).json()
+        units = (await admin.get("/org/units")).json()
+    assert result["rows_rejected"] == 0
+    # FD + School created once; two Departments; three Programmes.
+    assert len([u for u in units if u["type"] == "faculty_division"]) == 1
+    assert len([u for u in units if u["type"] == "school"]) == 1
+    assert len([u for u in units if u["type"] == "department"]) == 2
+    assert len([u for u in units if u["type"] == "program"]) == 3
 
 
-async def test_reimport_is_idempotent(make_client) -> None:
-    rows = [{"type": "faculty_division", "code": "FET", "name": "Eng", "parent_path": "uni"}]
+async def test_reimport_is_idempotent_and_updates_names(make_client) -> None:
     async with make_client("super-admin") as admin:
-        await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
-        first = (await _upload(admin, _csv(rows))).json()
-        second = (await _upload(admin, _csv(rows))).json()
+        await _with_university(admin)
+        first = (await _upload(admin, _csv([CATALOGUE]))).json()
+        again = (await _upload(admin, _csv([CATALOGUE]))).json()
         renamed = (await _upload(
-            admin, _csv([{**rows[0], "name": "Engineering and Technology"}])
+            admin, _csv([{**CATALOGUE, "programme_name": "B.Tech CSE (Revised)"}])
         )).json()
-    assert first["rows_created"] == 1
-    assert second["rows_unchanged"] == 1 and second["rows_created"] == 0
-    assert renamed["rows_updated"] == 1
+    assert first["rows_created"] == 4
+    assert again["rows_created"] == 0 and again["rows_unchanged"] == 4
+    assert renamed["rows_updated"] == 1  # only the Programme name changed
 
 
-async def test_import_is_super_admin_only(make_client) -> None:
+async def test_row_validation(make_client) -> None:
+    rows = [
+        {**CATALOGUE, "programme_code": "", "programme_name": "No code"},
+        {**CATALOGUE, "programme_code": "X1", "level": "Undergrad"},        # bad level
+        {**CATALOGUE, "programme_code": "X2", "mode": "Weekends"},          # bad mode
+        {**CATALOGUE, "programme_code": "X3", "duration_years": "many"},    # bad duration
+        CATALOGUE,                                                          # valid
+    ]
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        result = (await _upload(admin, _csv(rows))).json()
+    assert result["rows_rejected"] == 4
+    fields = {e["field"] for e in result["errors"]}
+    assert fields == {"programme_code", "level", "mode", "duration_years"}
+
+
+async def test_codes_are_case_and_separator_insensitive(make_client) -> None:
+    """bt-cse, BT_CSE and BT-CSE are the same code — no accidental duplicates."""
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        await _upload(admin, _csv([CATALOGUE]))
+        variant = {**CATALOGUE, "programme_code": "bt_cse", "faculty_division_code": "fet"}
+        result = (await _upload(admin, _csv([variant]))).json()
+        programmes = [u for u in (await admin.get("/org/units")).json() if u["type"] == "program"]
+    assert result["rows_created"] == 0
+    assert len(programmes) == 1
+
+
+async def test_import_requires_university_and_super_admin(make_client) -> None:
+    async with make_client("super-admin") as admin:
+        no_root = await _upload(admin, _csv([CATALOGUE]))
+        assert no_root.status_code == 409
+        assert "bootstrap" in no_root.json()["detail"]
+
+    # Distinct actor: the default user would already hold the super-admin grant
+    # seeded by the block above.
+    async with make_client("system-admin", user_id="it.staff") as staff:
+        assert (await _upload(staff, _csv([CATALOGUE]))).status_code == 403
+
+
+async def test_only_one_university_allowed(make_client) -> None:
+    """Single-university model: a second university row is refused."""
+    async with make_client("super-admin") as admin:
+        first = await admin.post(
+            "/org/units", json={"type": "university", "name": "U", "code": "UNI"}
+        )
+        second = await admin.post(
+            "/org/units", json={"type": "university", "name": "Other", "code": "OTHER"}
+        )
+    assert first.status_code == 201
+    assert second.status_code == 409
+    assert "already exists" in second.json()["detail"]
+
+
+async def test_table_edit_deactivate_and_reactivate(make_client, audit_rows) -> None:
+    """The org table's row actions: update fields, deactivate (never delete), restore."""
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        await _upload(admin, _csv([CATALOGUE]))
+        programme = [u for u in (await admin.get("/org/units")).json() if u["code"] == "BT-CSE"][0]
+
+        edited = await admin.put(
+            f"/org/units/{programme['id']}",
+            json={"name": "B.Tech CSE (Hons.)", "duration_years": 5},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["duration_years"] == 5
+
+        deactivated = await admin.post(f"/org/units/{programme['id']}/deactivate")
+        assert deactivated.json()["status"] == "deactivated"
+        assert programme["id"] not in [u["id"] for u in (await admin.get("/org/units")).json()]
+        with_inactive = await admin.get("/org/units", params={"include_inactive": True})
+        assert programme["id"] in [u["id"] for u in with_inactive.json()]
+
+        restored = await admin.post(f"/org/units/{programme['id']}/reactivate")
+        assert restored.json()["status"] == "active"
+
+        # There is no delete route — history must survive.
+        assert (await admin.delete(f"/org/units/{programme['id']}")).status_code == 405
+    assert await audit_rows("org.unit.updated")
+    assert await audit_rows("org.unit.reactivated")
+
+
+async def test_table_filters(make_client) -> None:
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        await _upload(admin, _csv([CATALOGUE]))
+        programmes = await admin.get("/org/units", params={"unit_type": "program"})
+        searched = await admin.get("/org/units", params={"search": "computational"})
+    assert [u["code"] for u in programmes.json()] == ["BT-CSE"]
+    assert [u["code"] for u in searched.json()] == ["SOCE"]
+
+
+async def test_templates_carry_sample_rows(make_client) -> None:
     async with make_client("system-admin") as staff:
-        denied = await _upload(staff, _csv([]))
-    assert denied.status_code == 403
-
-
-async def test_template_endpoints(make_client) -> None:
-    """Templates are listed and downloadable, and match the live column tuples."""
-    from unicore.modules.onboarding.schemas import CSV_COLUMNS_V1
-    from unicore.modules.org.schemas import ORG_CSV_COLUMNS
-
-    async with make_client("system-admin") as staff:
-        listed = (await staff.get("/templates")).json()
-        keys = {t["key"] for t in listed}
-        assert {"org-structure", "students", "sections"} <= keys
-
-        org = await staff.get("/templates/org-structure.csv")
-        assert org.status_code == 200
-        assert "attachment" in org.headers["content-disposition"]
-        header_line = [ln for ln in org.text.splitlines() if not ln.startswith("#")][0]
-        assert header_line == ",".join(ORG_CSV_COLUMNS)
-
-        students = await staff.get("/templates/students.csv")
-        student_header = [ln for ln in students.text.splitlines() if not ln.startswith("#")][0]
-        assert student_header == ",".join(CSV_COLUMNS_V1)
-
+        listed = {t["key"] for t in (await staff.get("/templates")).json()}
+        assert {"org-structure", "students", "sections"} <= listed
+        for key, minimum in (("org-structure", 4), ("students", 4), ("sections", 3)):
+            body = (await staff.get(f"/templates/{key}.csv")).text
+            data_lines = [ln for ln in body.splitlines() if ln.strip() and not ln.startswith("#")]
+            assert len(data_lines) - 1 >= minimum, f"{key} has too few sample rows"
+            assert any("SAMPLE DATA" in ln for ln in body.splitlines() if ln.startswith("#"))
         assert (await staff.get("/templates/nope.csv")).status_code == 404
 
 
 async def test_downloaded_template_imports_cleanly(make_client) -> None:
-    """The shipped sample data is a complete, self-consistent subtree: downloading
-    the template and uploading it unchanged builds the whole example hierarchy."""
+    """Download the org template and upload it unchanged — the sample catalogue applies."""
     async with make_client("super-admin") as admin:
-        await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
-
+        await _with_university(admin)
         template = (await admin.get("/templates/org-structure.csv")).text
         result = (await _upload(admin, template.encode())).json()
-        assert result["rows_rejected"] == 0, result["errors"]
-        assert result["rows_created"] == 6  # FD + School + 2 Depts + 2 Programs
-
-        root_id = (await admin.get("/org/root")).json()["id"]
-        fet = (await admin.get(f"/org/units/{root_id}/children")).json()[0]
-        soce = (await admin.get(f"/org/units/{fet['id']}/children")).json()[0]
-        depts = (await admin.get(f"/org/units/{soce['id']}/children")).json()
-    assert fet["code"] == "FET"
-    assert {d["code"] for d in depts} == {"AIDS", "CSE"}
-
-
-async def test_paths_accept_hyphen_or_underscore(make_client) -> None:
-    """Codes carry hyphens but ltree labels use underscores — both forms resolve."""
-    async with make_client("super-admin") as admin:
-        await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
-        await _upload(admin, (await admin.get("/templates/org-structure.csv")).text.encode())
-
-        rows = [
-            {"type": "program", "code": "BT-IT", "name": "B.Tech IT",
-             "parent_path": "UNI.FET.SOCE.CSE"},
-        ]
-        hyphen = (await _upload(admin, _csv(rows))).json()
-        underscore = (await _upload(
-            admin,
-            _csv([{**rows[0], "code": "BT-SE", "name": "B.Tech SE",
-                   "parent_path": "uni.fet.soce.cse"}]),
-        )).json()
-    assert hyphen["rows_created"] == 1
-    assert underscore["rows_created"] == 1
-
-
-async def test_student_and_section_templates_carry_sample_rows(make_client) -> None:
-    """Templates ship worked sample data, not a lone placeholder row."""
-    async with make_client("system-admin") as staff:
-        for key, minimum in (("students", 4), ("sections", 3), ("org-structure", 6)):
-            body = (await staff.get(f"/templates/{key}.csv")).text
-            data_lines = [
-                ln for ln in body.splitlines() if ln.strip() and not ln.startswith("#")
-            ]
-            assert len(data_lines) - 1 >= minimum, f"{key} has too few sample rows"
-            assert any("SAMPLE DATA" in ln for ln in body.splitlines() if ln.startswith("#"))
+        units = (await admin.get("/org/units")).json()
+    assert result["rows_rejected"] == 0, result["errors"]
+    assert len([u for u in units if u["type"] == "program"]) == 4

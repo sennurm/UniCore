@@ -11,11 +11,12 @@ type Unit = {
   code: string;
   path: string;
   status: string;
-  term_code: string | null;
+  level: string | null;
+  duration_years: number | null;
+  mode: string | null;
 };
 
 type ImportResult = {
-  rows_total: number;
   rows_created: number;
   rows_updated: number;
   rows_unchanged: number;
@@ -23,79 +24,85 @@ type ImportResult = {
   errors: { row_number: number; field: string; reason: string; raw_row: string }[];
 };
 
-const CHILD_TYPE: Record<string, string> = {
-  university: "faculty_division",
-  faculty_division: "school",
-  school: "department",
-  department: "program",
-};
-
-function UnitNode({ unit }: { unit: Unit }) {
-  const [children, setChildren] = useState<Unit[] | null>(null);
-
-  async function toggle() {
-    if (children !== null) {
-      setChildren(null);
-      return;
-    }
-    setChildren(await api<Unit[]>(`/org/units/${unit.id}/children`));
-  }
-
-  return (
-    <li>
-      <button className="tree-toggle" onClick={toggle}>
-        {children === null ? "+" : "−"} {unit.name} ({unit.code})
-      </button>
-      <span className="tag tag-outline" style={{ marginLeft: 6 }}>{unit.type}</span>
-      {unit.status !== "active" && (
-        <span className="tag tag-neutral" style={{ marginLeft: 6 }}>{unit.status}</span>
-      )}
-      {children !== null && (
-        <ul className="tree">
-          {children.length === 0 && <li className="tag tag-neutral">no children</li>}
-          {children.map((c) => (
-            <UnitNode key={c.id} unit={c} />
-          ))}
-        </ul>
-      )}
-    </li>
-  );
-}
+const UNIT_TYPES = ["faculty_division", "school", "department", "program"];
+const LEVELS = [
+  "Under Graduate",
+  "Post Graduate",
+  "PhD (Full-Time)",
+  "PhD (Part-Time)",
+  "Diploma/Certificate",
+];
 
 export default function OrgPage() {
-  const [root, setRoot] = useState<Unit | null>(null);
-  const [form, setForm] = useState({ type: "faculty_division", name: "", code: "", parent_id: "" });
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [typeFilter, setTypeFilter] = useState("");
+  const [search, setSearch] = useState("");
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const [editing, setEditing] = useState<Unit | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [newRow, setNewRow] = useState({ type: "faculty_division", code: "", name: "", parent_id: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
+    setError("");
     try {
-      setRoot(await api<Unit | null>("/org/root"));
+      const params = new URLSearchParams();
+      if (typeFilter) params.set("unit_type", typeFilter);
+      if (search) params.set("search", search);
+      if (includeInactive) params.set("include_inactive", "true");
+      setUnits(await api<Unit[]>(`/org/units?${params}`));
     } catch (err) {
       setError(String((err as Error).message));
     }
-  }, []);
+  }, [typeFilter, search, includeInactive]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function createUnit(e: React.FormEvent) {
+  async function saveEdit(unit: Unit) {
+    setError("");
+    try {
+      await api(`/org/units/${unit.id}`, {
+        method: "PUT",
+        body: {
+          name: unit.name,
+          level: unit.level,
+          duration_years: unit.duration_years,
+          mode: unit.mode,
+        },
+      });
+      setEditing(null);
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  async function toggleActive(unit: Unit) {
+    setError("");
+    const action = unit.status === "active" ? "deactivate" : "reactivate";
+    try {
+      await api(`/org/units/${unit.id}/${action}`, { method: "POST" });
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    }
+  }
+
+  async function addRow(e: React.FormEvent) {
     e.preventDefault();
     setError("");
     try {
       await api("/org/units", {
         method: "POST",
-        body: {
-          type: form.type,
-          name: form.name,
-          code: form.code,
-          parent_id: form.parent_id || null,
-        },
+        body: { ...newRow, parent_id: newRow.parent_id || null },
       });
-      setForm({ ...form, name: "", code: "" });
+      setNewRow({ type: "faculty_division", code: "", name: "", parent_id: "" });
+      setAdding(false);
       await load();
     } catch (err) {
       setError(String((err as Error).message));
@@ -125,31 +132,155 @@ export default function OrgPage() {
       <div>
         <h3 style={{ margin: 0 }}>Org structure</h3>
         <div className="uc-screen-sub">
-          University → Faculty Division → School → Department → Program · deactivate, never delete
+          One university · Faculty Divisions → Schools → Departments → Programmes ·
+          units are deactivated, never deleted, so history stays intact
         </div>
       </div>
+
       <div className="card">
-        <div className="card-kicker">Hierarchy</div>
-        {root === null ? (
-          <p className="card-body">
-            No university root yet — create one below (type: university, no parent id).
-          </p>
-        ) : (
-          <ul className="tree" style={{ paddingLeft: 0 }}>
-            <UnitNode unit={root} />
-          </ul>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="field" style={{ marginBottom: 0, maxWidth: 220 }}>
+            <label>Search name or code</label>
+            <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <div className="field" style={{ marginBottom: 0, maxWidth: 200 }}>
+            <label>Type</label>
+            <select className="input" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <option value="">All</option>
+              {UNIT_TYPES.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          </div>
+          <label className="card-meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={includeInactive}
+              onChange={(e) => setIncludeInactive(e.target.checked)} />
+            Show deactivated
+          </label>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-secondary" onClick={() => setAdding((v) => !v)}>
+            {adding ? "Cancel" : "+ Add unit"}
+          </button>
+        </div>
+
+        {adding && (
+          <form onSubmit={addRow} style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+            <div className="field" style={{ marginBottom: 0, maxWidth: 180 }}>
+              <label>Type</label>
+              <select className="input" value={newRow.type}
+                onChange={(e) => setNewRow({ ...newRow, type: e.target.value })}>
+                {UNIT_TYPES.map((t) => <option key={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="field" style={{ marginBottom: 0, maxWidth: 140 }}>
+              <label>Code</label>
+              <input className="input" value={newRow.code}
+                onChange={(e) => setNewRow({ ...newRow, code: e.target.value })} required />
+            </div>
+            <div className="field" style={{ marginBottom: 0, maxWidth: 240 }}>
+              <label>Name</label>
+              <input className="input" value={newRow.name}
+                onChange={(e) => setNewRow({ ...newRow, name: e.target.value })} required />
+            </div>
+            <div className="field" style={{ marginBottom: 0, maxWidth: 300 }}>
+              <label>Parent unit id</label>
+              <input className="input" value={newRow.parent_id}
+                onChange={(e) => setNewRow({ ...newRow, parent_id: e.target.value })} required />
+            </div>
+            <button className="btn btn-primary" type="submit">Create</button>
+          </form>
         )}
+
+        <table className="table" style={{ marginTop: 12 }}>
+          <thead>
+            <tr>
+              <th>Type</th><th>Code</th><th>Name</th><th>Path</th>
+              <th>Level</th><th>Yrs</th><th>Mode</th><th>Status</th><th />
+            </tr>
+          </thead>
+          <tbody>
+            {units.map((u) => {
+              const isEditing = editing?.id === u.id;
+              const row = isEditing ? editing : u;
+              return (
+                <tr key={u.id} style={{ opacity: u.status === "active" ? 1 : 0.5 }}>
+                  <td><span className="tag tag-outline">{u.type}</span></td>
+                  <td>{u.code}</td>
+                  <td>
+                    {isEditing ? (
+                      <input className="input" value={row.name}
+                        onChange={(e) => setEditing({ ...row, name: e.target.value })} />
+                    ) : u.name}
+                  </td>
+                  <td style={{ fontSize: 11, opacity: 0.6 }}>{u.path}</td>
+                  <td>
+                    {isEditing && u.type === "program" ? (
+                      <select className="input" value={row.level ?? ""}
+                        onChange={(e) => setEditing({ ...row, level: e.target.value })}>
+                        <option value="">—</option>
+                        {LEVELS.map((l) => <option key={l}>{l}</option>)}
+                      </select>
+                    ) : (u.level ?? "—")}
+                  </td>
+                  <td>
+                    {isEditing && u.type === "program" ? (
+                      <input className="input" type="number" min={1} max={10}
+                        value={row.duration_years ?? ""}
+                        onChange={(e) => setEditing({ ...row, duration_years: Number(e.target.value) })} />
+                    ) : (u.duration_years ?? "—")}
+                  </td>
+                  <td>
+                    {isEditing && u.type === "program" ? (
+                      <select className="input" value={row.mode ?? ""}
+                        onChange={(e) => setEditing({ ...row, mode: e.target.value })}>
+                        <option value="">—</option>
+                        <option>Full-Time</option>
+                        <option>Part-Time</option>
+                      </select>
+                    ) : (u.mode ?? "—")}
+                  </td>
+                  <td>
+                    <span className={u.status === "active" ? "tag tag-accent" : "tag tag-neutral"}>
+                      {u.status}
+                    </span>
+                  </td>
+                  <td style={{ whiteSpace: "nowrap" }}>
+                    {isEditing ? (
+                      <>
+                        <button className="btn btn-ghost" onClick={() => void saveEdit(row)}>Save</button>
+                        <button className="btn btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn btn-ghost" onClick={() => setEditing(u)}>Edit</button>
+                        <button className="btn btn-ghost" onClick={() => void toggleActive(u)}>
+                          {u.status === "active" ? "Deactivate" : "Restore"}
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            {units.length === 0 && (
+              <tr><td colSpan={9} className="card-meta">No units match these filters.</td></tr>
+            )}
+          </tbody>
+        </table>
       </div>
-      <div className="card" style={{ maxWidth: 460 }}>
-        <div className="card-kicker">Bulk upload · Super Admin</div>
+
+      <div className="card" style={{ maxWidth: 520 }}>
+        <div className="card-kicker">Bulk upload · course catalogue</div>
+        <p className="card-meta">
+          One row per Programme with its Faculty Division, School and Department as columns —
+          missing ancestors are created automatically.
+        </p>
         <form onSubmit={importCsv}>
           <div className="field">
-            <label>Org structure CSV</label>
+            <label>CSV file</label>
             <input className="input" type="file" accept=".csv,text/csv"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
           </div>
           <button className="btn btn-primary" type="submit" disabled={busy || !file}>
-            {busy ? "Importing…" : "Import structure"}
+            {busy ? "Importing…" : "Import catalogue"}
           </button>
         </form>
         {importResult && (
@@ -160,9 +291,7 @@ export default function OrgPage() {
         )}
         {importResult && importResult.errors.length > 0 && (
           <table className="table">
-            <thead>
-              <tr><th>Row</th><th>Field</th><th>Reason</th></tr>
-            </thead>
+            <thead><tr><th>Row</th><th>Field</th><th>Reason</th></tr></thead>
             <tbody>
               {importResult.errors.map((e, i) => (
                 <tr key={i}>
@@ -177,52 +306,7 @@ export default function OrgPage() {
       </div>
 
       <TemplateLinks only={["org-structure"]} />
-
-      <div className="card">
-        <div className="card-kicker">Create single unit · Super Admin</div>
-        <form onSubmit={createUnit} style={{ maxWidth: 380 }}>
-          <div className="field">
-            <label>Type</label>
-            <select
-              className="input"
-              value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value })}
-            >
-              {["university", ...Object.values(CHILD_TYPE)].map((t) => (
-                <option key={t}>{t}</option>
-              ))}
-            </select>
-          </div>
-          <div className="field">
-            <label>Name</label>
-            <input
-              className="input"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
-          </div>
-          <div className="field">
-            <label>Code</label>
-            <input
-              className="input"
-              value={form.code}
-              onChange={(e) => setForm({ ...form, code: e.target.value })}
-              required
-            />
-          </div>
-          <div className="field">
-            <label>Parent unit id (empty for university)</label>
-            <input
-              className="input"
-              value={form.parent_id}
-              onChange={(e) => setForm({ ...form, parent_id: e.target.value })}
-            />
-          </div>
-          <button className="btn btn-primary" type="submit">Create</button>
-        </form>
-        {error && <p className="error">{error}</p>}
-      </div>
+      {error && <p className="error">{error}</p>}
     </div>
   );
 }

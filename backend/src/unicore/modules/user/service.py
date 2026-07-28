@@ -149,6 +149,13 @@ async def provision_student(
     return user
 
 
+async def list_users(
+    session: AsyncSession, search: str | None, status: str | None, limit: int
+) -> list[User]:
+    """Filterable listing for the combined Users & roles directory."""
+    return list(await dao.list_users(session, search, status, limit))
+
+
 async def get_by_erp_id(session: AsyncSession, erp_id: str) -> User | None:
     return await dao.get_by_erp_id(session, erp_id)
 
