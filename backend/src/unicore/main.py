@@ -13,12 +13,22 @@ from unicore.core.security import auth_gate_middleware, register_token_verifier
 from unicore.modules.audit.router import router as audit_router
 from unicore.modules.auth import service as auth_service
 from unicore.modules.auth.router import router as auth_router
+from unicore.modules.onboarding.router import router as onboarding_router
 from unicore.modules.org.router import router as org_router
 from unicore.modules.rbac import service as rbac_service
 from unicore.modules.rbac.router import router as rbac_router
+from unicore.modules.timetable.router import router as timetable_router
 from unicore.modules.user.router import router as user_router
 
-MODULE_ROUTERS = (auth_router, user_router, org_router, rbac_router, audit_router)
+MODULE_ROUTERS = (
+    auth_router,
+    user_router,
+    org_router,
+    rbac_router,
+    audit_router,
+    timetable_router,
+    onboarding_router,
+)
 
 
 def _configure_tracing(service_name: str) -> None:

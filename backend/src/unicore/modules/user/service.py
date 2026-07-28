@@ -108,6 +108,51 @@ async def deactivate_user(session: AsyncSession, ctx: AuthContext, user_id: uuid
     return user
 
 
+async def provision_student(
+    session: AsyncSession,
+    ctx: AuthContext,
+    *,
+    username: str,
+    full_name: str,
+    erp_id: str,
+    email: str | None = None,
+    mobile: str | None = None,
+) -> User:
+    """Provision from an import row: no commit (the batch owns the transaction),
+    state IMPORTED until credential delivery activates the account (ONB-FR-06).
+
+    Takes primitives rather than a schema object so other modules never import
+    this module's schemas (ARCHITECTURE.md: service-to-service only).
+    """
+    if await dao.get_by_username(session, username) is not None:
+        username = f"{username}.{uuid.uuid4().hex[:4]}"
+    user = User(
+        username=username,
+        erp_id=erp_id,
+        full_name=full_name,
+        email=email,
+        mobile=mobile,
+        kind="student",
+        status="imported",
+        force_password_change=True,
+    )
+    session.add(user)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="user.imported",
+        object_type="user",
+        object_id=str(user.id),
+        after=_snapshot(user),
+    )
+    return user
+
+
+async def get_by_erp_id(session: AsyncSession, erp_id: str) -> User | None:
+    return await dao.get_by_erp_id(session, erp_id)
+
+
 async def get_by_username(session: AsyncSession, username: str) -> User | None:
     return await dao.get_by_username(session, username)
 

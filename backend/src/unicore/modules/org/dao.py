@@ -36,6 +36,55 @@ async def paths_for_ids(
     return {row.id: row.path for row in result}
 
 
+async def ancestor_of_type(
+    session: AsyncSession, unit_id: uuid.UUID, unit_type: str
+) -> uuid.UUID | None:
+    """Nearest ancestor (or self) of the given type, via ltree containment."""
+    result = await session.execute(
+        text(
+            "SELECT a.id FROM org_units a "
+            "JOIN org_units u ON u.path <@ a.path "
+            "WHERE u.id = :unit_id AND a.type = :unit_type "
+            "ORDER BY nlevel(a.path) DESC LIMIT 1"
+        ),
+        {"unit_id": str(unit_id), "unit_type": unit_type},
+    )
+    row = result.scalar_one_or_none()
+    return row
+
+
+async def find_by_code_in_scope(
+    session: AsyncSession, code: str, unit_type: str, scope_paths: list[str] | None
+):
+    """Units of a type matching a code, optionally restricted to actor scope subtrees."""
+    query = select(OrgUnit).where(
+        OrgUnit.code == code, OrgUnit.type == unit_type, OrgUnit.status == "active"
+    )
+    result = await session.execute(query)
+    units = list(result.scalars().all())
+    if scope_paths is None:
+        return units
+    return [
+        u
+        for u in units
+        if any(u.path == sp or u.path.startswith(f"{sp}.") for sp in scope_paths)
+    ]
+
+
+async def find_section(
+    session: AsyncSession, program_id: uuid.UUID, label: str, term_code: str
+) -> OrgUnit | None:
+    result = await session.execute(
+        select(OrgUnit).where(
+            OrgUnit.parent_id == program_id,
+            OrgUnit.type == "section",
+            OrgUnit.name == label,
+            OrgUnit.term_code == term_code,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def path_exists(session: AsyncSession, path: str) -> bool:
     result = await session.execute(select(OrgUnit.id).where(OrgUnit.path == path))
     return result.scalar_one_or_none() is not None

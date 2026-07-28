@@ -176,6 +176,26 @@ async def reparent_unit(
     return unit
 
 
+async def ancestor_of_type(
+    session: AsyncSession, unit_id: uuid.UUID, unit_type: str
+) -> uuid.UUID | None:
+    """Nearest ancestor of a given type — used by other modules' scope logic."""
+    return await dao.ancestor_of_type(session, unit_id, unit_type)
+
+
+async def resolve_by_code(
+    session: AsyncSession, code: str, unit_type: str, scope_paths: list[str] | None
+) -> list[OrgUnit]:
+    """Units of `unit_type` with `code`, restricted to the caller's scope subtrees."""
+    return await dao.find_by_code_in_scope(session, code, unit_type, scope_paths)
+
+
+async def find_section(
+    session: AsyncSession, program_id: uuid.UUID, label: str, term_code: str
+) -> OrgUnit | None:
+    return await dao.find_section(session, program_id, label, term_code)
+
+
 async def get_unit_paths(
     session: AsyncSession, unit_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, str]:

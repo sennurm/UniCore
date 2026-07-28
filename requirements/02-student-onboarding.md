@@ -149,8 +149,9 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 
 ## 11. Open Questions
 
-- **Roll-number source:** does UniCore assign roll numbers or import ERP-issued ones? **Proposed default (used throughout this doc): import ERP-issued roll numbers**; UniCore only enforces uniqueness. If any School needs UniCore-side assignment, that becomes a configurable per-School numbering rule — decide before build.
-- ERP API feed: push (ERP calls UniCore) or pull (UniCore polls)? Proposed: pull on schedule + manual trigger, to keep UniCore in control of validation timing.
+- ~~Roll-number source~~ — **resolved 27-07-2026: ERP-issued roll numbers are imported**; UniCore enforces uniqueness within Program + admission year and rejects collisions to the error report.
+- ~~ERP API feed~~ — **resolved 27-07-2026: CSV upload only for MVP.** The API feed lands later as an adapter over the same validation pipeline.
+- **ERP ID format** — resolved 27-07-2026 as an opaque non-empty string (≤100 chars); tighten per-School validation only if the ERP team confirms a stable pattern.
 - Should Class In-charge receive a notification on re-allotment into/out of their Section? Proposed: yes, in-app notification, post-MVP email digest.
 
 ## 12. Flow Diagram

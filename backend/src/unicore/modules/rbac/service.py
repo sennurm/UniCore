@@ -42,6 +42,17 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "audit:read": ("super-admin", "system-admin"),
     "device:approve": ("super-admin", "system-admin"),
     "grievance:resolve": ("super-admin", "system-admin"),
+    "ttm:term-upload": ("super-admin", "system-admin", "office-staff"),
+    "ttm:term-approve": ("super-admin", "school-incharge"),
+    "ttm:term-read": ("super-admin", "system-admin", "office-staff", "school-incharge",
+                      "timetable-cell", "hod"),
+    "ttm:section-create": ("super-admin", "system-admin", "timetable-cell"),
+    "onb:import": ("super-admin", "system-admin", "office-staff"),
+    "onb:read": ("super-admin", "system-admin", "office-staff", "school-incharge", "hod",
+                 "class-incharge"),
+    "onb:allot": ("super-admin", "system-admin", "office-staff"),
+    "onb:transfer": ("super-admin", "system-admin"),
+    "onb:withdraw": ("super-admin", "system-admin", "office-staff"),
 }
 
 # Who may issue a given role (AUTH §4 matrix). Default: admins only.
@@ -141,6 +152,19 @@ async def _singleton_intact(grant: GrantView) -> bool:
             session, grant.role_code, grant.org_unit_id
         )
     return len(holders) == 1
+
+
+async def scope_paths_for(ctx: AuthContext, roles: tuple[str, ...]) -> list[str] | None:
+    """ltree paths the caller's matching grants cover. None = university-wide."""
+    paths: list[str] = []
+    for g in await effective_grants(ctx):
+        if g.role_code not in roles:
+            continue
+        if g.org_unit_id is None:
+            return None  # university scope covers everything
+        if g.unit_path:
+            paths.append(g.unit_path)
+    return paths
 
 
 async def ensure_scope_covers(
