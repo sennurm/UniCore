@@ -100,6 +100,7 @@ Students · teaching staff in five grades (Professor, Associate Professor, Assis
 | Availability | 99.5% during academic hours (08:00–18:00 IST) |
 | Encryption | TLS 1.2+ in transit; encryption at rest for all personal data; question papers additionally app-layer encrypted until release |
 | Audit | Every privileged/corrective action writes an immutable record: who, what, when, before/after, reason |
+| Bulk data upload | Every bulk-upload surface ships a **downloadable CSV template** generated from the same column definition its validator uses, so templates can never drift from the schema. Each carries a comment block (mandatory vs optional fields, formats, safety of re-upload), the header row, and several worked sample rows. Uploads share one discipline: pre-parse gate (size/encoding/header), row-level validation, **partial commit** (valid rows land, invalid rows return an actionable error report with row number, field, reason and raw row), and idempotent re-upload. Templates are listed and downloaded from an authenticated endpoint — no upload surface is public |
 | Notifications | Shared baseline for all modules: **in-app always**; **email** per event class (School/University-configurable); **SMS reserved for OTP and credential delivery only** (DLT cost). Delivery is at-least-once with retry/backoff; failures after retries surface on an ops dashboard; user-level muting never applies to security or legal notices. Modules keep their own delivery SLAs and reference this baseline |
 
 ## 9. Approval gate

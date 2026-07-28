@@ -26,7 +26,7 @@ Student onboarding in UniCore is **import-only**: students arrive fully formed f
 
 | Group | Access granted |
 |---|---|
-| Admin/office staff | Run imports, single adds, section (re-)allotment, withdrawal — **scoped to their own campus** |
+| Admin/office staff (`office-staff` role, School-scoped) | Run imports, single adds, section (re-)allotment, withdrawal — **scoped to their granted org subtree** (see the campus-scope note in §4) |
 | System Admin (IT cell) | Same operations **cross-campus**; transfer execution; import configuration (ERP API keys, file schema version) |
 | HoD | Read-only view of their Department's onboarding status (imported / pending activation / active) |
 | Class In-charge | Read-only roster of their Section |
@@ -48,6 +48,12 @@ Student onboarding in UniCore is **import-only**: students arrive fully formed f
 | Campus or Program transfer | System Admin only (crosses org-unit scopes) | API + service layer |
 | Withdrawal / dropout deactivation | Admin/office staff (own campus), System Admin; deactivation revokes sessions per AUTH | API + session store |
 | Approve data-correction grievance | Admin/office staff for UniCore-owned fields; ERP-mastered fields routed to ERP with tracked status | API |
+
+**Campus-scope note (28-07-2026):** the requirement is written as "campus-scoped".
+Because campus is a dimension on org units rather than a hierarchy node, this is
+realised as **org-unit scoping**: an `office-staff` grant at a School covers that
+subtree, and rows targeting Programs outside it are rejected `scope-conflict`.
+System Admin / Super Admin hold University scope and therefore cross everything.
 
 ### Business rules
 
@@ -108,7 +114,9 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 - ONB-FR-12: Withdrawal/dropout: state change, immediate session revocation, removal from future Sessions, retention of history.
 - ONB-FR-13: Data-correction grievance handling: UniCore-owned fields correctable with audit; ERP-mastered fields routed to ERP with tracked status and user-visible outcome.
 - ONB-FR-14: Batch dashboard: per-batch counts, error-report download, credential-delivery status (delivered/failed/pending) per student.
-- ONB-FR-15: All operations campus-scoped per §4; cross-campus operations restricted to System Admin.
+- ONB-FR-15: All operations org-scoped per §4; operations crossing an actor's subtree are restricted to System Admin.
+- ONB-FR-16: **Upload template** — the student CSV template is downloadable in-app, generated from the same column definition the validator uses (per the overview's bulk-upload baseline) and carrying worked sample rows that demonstrate the mandatory fields, the DD-MM-YYYY date format, and the at-least-one-contact-channel rule.
+- ONB-FR-17: **Section roster read** — a Section's roster as of any date, powered by the dated membership history (ONB-FR-10), showing each student's account state and credential-delivery status; consumed by the onboarding dashboard and later by TTM/ATT.
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
