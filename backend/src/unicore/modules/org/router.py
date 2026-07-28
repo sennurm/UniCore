@@ -6,13 +6,14 @@ There is deliberately NO delete endpoint: org units are deactivate-never-delete
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.core.db import get_session
 from unicore.core.security import AuthContext
 from unicore.modules.org import service
 from unicore.modules.org.schemas import (
+    OrgImportResult,
     OrgUnitCreate,
     OrgUnitOut,
     OrgUnitRename,
@@ -30,6 +31,19 @@ async def create_unit(
     ctx: AuthContext = Depends(require_permission("org:create")),
 ) -> OrgUnitOut:
     return OrgUnitOut.model_validate(await service.create_unit(session, ctx, payload))
+
+
+@router.post("/imports", response_model=OrgImportResult, status_code=201)
+async def import_units(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("org:create")),
+) -> OrgImportResult:
+    """Bulk-create Faculty Divisions/Schools/Departments/Programs from the CSV
+    template. Partial commit: valid rows land, invalid rows come back as errors."""
+    content = await file.read()
+    result = await service.import_csv(session, ctx, file.filename or "org.csv", content)
+    return OrgImportResult.model_validate(result)
 
 
 @router.patch("/units/{unit_id}", response_model=OrgUnitOut)

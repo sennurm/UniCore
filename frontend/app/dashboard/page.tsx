@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api } from "@/lib/api";
+import { api, upload } from "@/lib/api";
+import TemplateLinks from "@/components/TemplateLinks";
 
 type Unit = {
   id: string;
@@ -11,6 +12,15 @@ type Unit = {
   path: string;
   status: string;
   term_code: string | null;
+};
+
+type ImportResult = {
+  rows_total: number;
+  rows_created: number;
+  rows_updated: number;
+  rows_unchanged: number;
+  rows_rejected: number;
+  errors: { row_number: number; field: string; reason: string; raw_row: string }[];
 };
 
 const CHILD_TYPE: Record<string, string> = {
@@ -55,6 +65,9 @@ function UnitNode({ unit }: { unit: Unit }) {
 export default function OrgPage() {
   const [root, setRoot] = useState<Unit | null>(null);
   const [form, setForm] = useState({ type: "faculty_division", name: "", code: "", parent_id: "" });
+  const [file, setFile] = useState<File | null>(null);
+  const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const load = useCallback(async () => {
@@ -89,6 +102,24 @@ export default function OrgPage() {
     }
   }
 
+  async function importCsv(e: React.FormEvent) {
+    e.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setError("");
+    setImportResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      setImportResult(await upload<ImportResult>("/org/imports", form));
+      await load();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="uc-screen">
       <div>
@@ -109,8 +140,46 @@ export default function OrgPage() {
           </ul>
         )}
       </div>
+      <div className="card" style={{ maxWidth: 460 }}>
+        <div className="card-kicker">Bulk upload · Super Admin</div>
+        <form onSubmit={importCsv}>
+          <div className="field">
+            <label>Org structure CSV</label>
+            <input className="input" type="file" accept=".csv,text/csv"
+              onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={busy || !file}>
+            {busy ? "Importing…" : "Import structure"}
+          </button>
+        </form>
+        {importResult && (
+          <p className="card-meta">
+            {importResult.rows_created} created · {importResult.rows_updated} updated ·{" "}
+            {importResult.rows_unchanged} unchanged · {importResult.rows_rejected} rejected
+          </p>
+        )}
+        {importResult && importResult.errors.length > 0 && (
+          <table className="table">
+            <thead>
+              <tr><th>Row</th><th>Field</th><th>Reason</th></tr>
+            </thead>
+            <tbody>
+              {importResult.errors.map((e, i) => (
+                <tr key={i}>
+                  <td>{e.row_number}</td>
+                  <td><span className="tag tag-outline">{e.field}</span></td>
+                  <td>{e.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <TemplateLinks only={["org-structure"]} />
+
       <div className="card">
-        <div className="card-kicker">Create unit · Super Admin</div>
+        <div className="card-kicker">Create single unit · Super Admin</div>
         <form onSubmit={createUnit} style={{ maxWidth: 380 }}>
           <div className="field">
             <label>Type</label>

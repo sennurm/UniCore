@@ -5,6 +5,8 @@ instances (TTM-FR-19). Term dates are per School — one campus hosts semester- 
 year-based Schools simultaneously.
 """
 
+import csv
+import io
 import uuid
 from datetime import UTC, datetime
 
@@ -16,7 +18,7 @@ from unicore.modules.audit import service as audit_service
 from unicore.modules.org import service as org_service
 from unicore.modules.timetable import dao
 from unicore.modules.timetable.models import AcademicTerm
-from unicore.modules.timetable.schemas import TermCreate
+from unicore.modules.timetable.schemas import SECTION_CSV_COLUMNS, TermCreate
 
 
 def _snapshot(term: AcademicTerm) -> dict[str, str | int | None]:
@@ -131,3 +133,49 @@ async def create_section(
         raise HTTPException(status_code=422, detail="Program has no owning School.")
     await require_approved_term(session, school_id, term_code)
     return await org_service.create_section_instance(session, ctx, program_id, label, term_code)
+
+
+async def import_sections(
+    session: AsyncSession, ctx: AuthContext, content: bytes, term_code: str
+) -> dict[str, object]:
+    """Bulk Section instances from the CSV template; partial commit with errors."""
+    if not content:
+        raise HTTPException(status_code=422, detail="File is empty.")
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
+
+    body = "\n".join(
+        line for line in text_content.splitlines() if not line.lstrip().startswith("#")
+    )
+    reader = csv.DictReader(io.StringIO(body))
+    missing = set(SECTION_CSV_COLUMNS) - set(h.strip() for h in (reader.fieldnames or []))
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Header does not match the section template — missing: "
+            f"{', '.join(sorted(missing))}.",
+        )
+
+    created = 0
+    errors: list[dict[str, object]] = []
+    for row_number, raw in enumerate(reader, start=2):
+        row = {k: (v or "").strip() for k, v in raw.items() if k}
+        program_path = row.get("program_path", "").lower()
+        label = row.get("label", "")
+        try:
+            if not program_path or not label:
+                raise HTTPException(status_code=422, detail="program_path and label are required")
+            program = await org_service.get_unit_by_path(session, program_path)
+            if program is None:
+                raise HTTPException(
+                    status_code=422, detail=f"no Program at path '{program_path}'"
+                )
+            await create_section(session, ctx, program.id, label, term_code)
+            created += 1
+        except HTTPException as err:
+            errors.append(
+                {"row_number": row_number, "reason": str(err.detail), "raw_row": str(row)}
+            )
+    return {"rows_created": created, "rows_rejected": len(errors), "errors": errors}

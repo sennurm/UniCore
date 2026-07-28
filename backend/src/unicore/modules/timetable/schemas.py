@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from unicore.core.templates import CsvTemplate, register
+
 
 class TermCreate(BaseModel):
     school_id: uuid.UUID
@@ -58,3 +60,25 @@ class SectionOut(BaseModel):
     status: str
 
     model_config = {"from_attributes": True}
+
+
+SECTION_CSV_COLUMNS = ("program_path", "label")
+
+register(
+    CsvTemplate(
+        key="sections",
+        title="Section instances",
+        description=(
+            "Per-term Section instances created during term setup. The term is chosen "
+            "at upload time and must already be approved for the owning School."
+        ),
+        columns=SECTION_CSV_COLUMNS,
+        example={"program_path": "UNI.FET.SOCE.CSE.BT_CSE", "label": "3B"},
+        notes=(
+            "program_path is the Program's dotted code path.",
+            "label is the Section name students see, e.g. 3B. Labels may repeat across "
+            "terms — each term gets its own Section instance.",
+            "The School's academic term must be approved before Sections can be created.",
+        ),
+    )
+)

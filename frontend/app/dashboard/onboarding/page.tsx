@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api, downloadUrl, upload } from "@/lib/api";
+import TemplateLinks from "@/components/TemplateLinks";
 
 type Batch = {
   id: string;
@@ -140,6 +141,8 @@ export default function OnboardingPage() {
         </p>
         {message && <p className="card-meta">{message}</p>}
       </div>
+
+      <TemplateLinks only={["students"]} />
 
       <div className="card">
         <div className="card-kicker">Batches</div>

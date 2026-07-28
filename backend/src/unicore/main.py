@@ -10,6 +10,7 @@ from unicore.core.health import router as health_router
 from unicore.core.logging import configure_logging
 from unicore.core.middleware import access_log_middleware, install_error_envelope
 from unicore.core.security import auth_gate_middleware, register_token_verifier
+from unicore.core.templates_router import router as templates_router
 from unicore.modules.audit.router import router as audit_router
 from unicore.modules.auth import service as auth_service
 from unicore.modules.auth.router import router as auth_router
@@ -28,6 +29,7 @@ MODULE_ROUTERS = (
     audit_router,
     timetable_router,
     onboarding_router,
+    templates_router,
 )
 
 

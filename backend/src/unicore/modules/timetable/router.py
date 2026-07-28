@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.core.db import get_session
@@ -35,6 +35,18 @@ async def approve_term(
     ctx: AuthContext = Depends(require_permission("ttm:term-approve")),
 ) -> TermOut:
     return TermOut.model_validate(await service.approve_term(session, ctx, term_id))
+
+
+@router.post("/sections/imports", status_code=201)
+async def import_sections(
+    term_code: str = Form(...),
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:section-create")),
+) -> dict[str, object]:
+    """Bulk Section-instance creation for a term, from the CSV template."""
+    content = await file.read()
+    return await service.import_sections(session, ctx, content, term_code)
 
 
 @router.get("/schools/{school_id}/terms", response_model=list[TermOut])

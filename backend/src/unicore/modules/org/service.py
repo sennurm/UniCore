@@ -6,6 +6,8 @@ Section instances are NOT created here (TTM-FR-19) — TTM's term setup will cal
 `create_section_instance` in its own milestone.
 """
 
+import csv
+import io
 import re
 import uuid
 from collections.abc import Sequence
@@ -17,7 +19,7 @@ from unicore.core.security import AuthContext
 from unicore.modules.audit import service as audit_service
 from unicore.modules.org import dao
 from unicore.modules.org.models import PARENT_TYPE_OF, OrgUnit
-from unicore.modules.org.schemas import OrgUnitCreate
+from unicore.modules.org.schemas import ORG_CSV_COLUMNS, OrgUnitCreate
 
 
 def _label(code: str) -> str:
@@ -196,6 +198,11 @@ async def find_section(
     return await dao.find_section(session, program_id, label, term_code)
 
 
+async def get_unit_by_path(session: AsyncSession, path: str) -> OrgUnit | None:
+    """Path lookup for other modules' bulk importers."""
+    return await dao.get_by_path(session, path)
+
+
 async def get_unit_paths(
     session: AsyncSession, unit_ids: list[uuid.UUID]
 ) -> dict[uuid.UUID, str]:
@@ -269,3 +276,176 @@ async def create_section_instance(
     )
     await session.commit()
     return section
+
+
+# --- CSV import (Super Admin; same rules as the single-unit endpoint) ---------
+
+MAX_ORG_FILE_BYTES = 5 * 1024 * 1024
+_DEPTH_ORDER = ("faculty_division", "school", "department", "program")
+
+
+async def import_csv(
+    session: AsyncSession, ctx: AuthContext, filename: str, content: bytes
+) -> dict[str, object]:
+    """Bulk org creation. Rows reference parents by dotted path and are processed
+    shallowest-first, so one file can build a whole subtree in any order.
+
+    Partial commit like the student import: valid rows land, invalid rows come back
+    as an error report. Existing units are never duplicated or deleted.
+    """
+    if not content:
+        raise HTTPException(status_code=422, detail="File is empty.")
+    if len(content) > MAX_ORG_FILE_BYTES:
+        raise HTTPException(status_code=413, detail="File exceeds the 5 MB limit.")
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
+
+    # Tolerate the template's leading comment lines.
+    body = "\n".join(
+        line for line in text_content.splitlines() if not line.lstrip().startswith("#")
+    )
+    reader = csv.DictReader(io.StringIO(body))
+    header = [h.strip() for h in (reader.fieldnames or [])]
+    missing = set(ORG_CSV_COLUMNS) - set(header)
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail="Header does not match the org template — missing: "
+            f"{', '.join(sorted(missing))}.",
+        )
+
+    rows = [
+        (index, {k: (v or "").strip() for k, v in raw.items() if k})
+        for index, raw in enumerate(reader, start=2)
+    ]
+    # Shallowest first so parents exist before their children, whatever the file order.
+    rows.sort(key=lambda item: _DEPTH_ORDER.index(item[1].get("type", ""))
+              if item[1].get("type", "") in _DEPTH_ORDER else len(_DEPTH_ORDER))
+
+    created = updated = unchanged = 0
+    errors: list[dict[str, object]] = []
+
+    for row_number, row in rows:
+        try:
+            outcome = await _import_org_row(session, ctx, row)
+        except _OrgRowError as err:
+            errors.append(
+                {
+                    "row_number": row_number,
+                    "field": err.field,
+                    "reason": err.reason,
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items()),
+                }
+            )
+            continue
+        if outcome == "created":
+            created += 1
+        elif outcome == "updated":
+            updated += 1
+        else:
+            unchanged += 1
+
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.import.completed",
+        object_type="org_import",
+        object_id=filename,
+        after={
+            "created": created,
+            "updated": updated,
+            "unchanged": unchanged,
+            "rejected": len(errors),
+        },
+    )
+    await session.commit()
+    return {
+        "rows_total": len(rows),
+        "rows_created": created,
+        "rows_updated": updated,
+        "rows_unchanged": unchanged,
+        "rows_rejected": len(errors),
+        "errors": errors,
+    }
+
+
+class _OrgRowError(Exception):
+    def __init__(self, field: str, reason: str) -> None:
+        self.field = field
+        self.reason = reason
+        super().__init__(f"{field}: {reason}")
+
+
+async def _import_org_row(
+    session: AsyncSession, ctx: AuthContext, row: dict[str, str]
+) -> str:
+    unit_type = row.get("type", "").strip().lower()
+    code = row.get("code", "").strip()
+    name = row.get("name", "").strip()
+    parent_path = row.get("parent_path", "").strip().lower()
+
+    if unit_type == "section":
+        raise _OrgRowError(
+            "type", "Sections are created per term by the Timetable Cell (TTM-FR-19)"
+        )
+    if unit_type not in _DEPTH_ORDER:
+        raise _OrgRowError("type", f"must be one of {', '.join(_DEPTH_ORDER)}")
+    if not code:
+        raise _OrgRowError("code", "mandatory field is missing")
+    if not name:
+        raise _OrgRowError("name", "mandatory field is missing")
+    if not parent_path:
+        raise _OrgRowError("parent_path", "mandatory for every non-university row")
+
+    parent = await dao.get_by_path(session, parent_path)
+    if parent is None:
+        raise _OrgRowError("parent_path", f"no org unit at path '{parent_path}'")
+    if parent.type != PARENT_TYPE_OF[unit_type]:
+        raise _OrgRowError(
+            "parent_path",
+            f"a {unit_type} must sit under a {PARENT_TYPE_OF[unit_type]}, not a {parent.type}",
+        )
+    if parent.status != "active":
+        raise _OrgRowError("parent_path", "parent is deactivated")
+
+    path = f"{parent.path}.{_label(code)}"
+    existing = await dao.get_by_path(session, path)
+    if existing is not None:
+        if existing.name == name:
+            return "unchanged"
+        before = _snapshot(existing)
+        existing.name = name
+        await audit_service.record(
+            session,
+            actor=ctx.user_id,
+            action="org.unit.renamed",
+            object_type="org_unit",
+            object_id=str(existing.id),
+            scope=existing.path,
+            before=before,
+            after=_snapshot(existing),
+        )
+        return "updated"
+
+    unit = OrgUnit(
+        type=unit_type,
+        name=name,
+        code=code,
+        parent_id=parent.id,
+        path=path,
+        campus_code=row.get("campus_code") or parent.campus_code,
+    )
+    session.add(unit)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.unit.created",
+        object_type="org_unit",
+        object_id=str(unit.id),
+        scope=unit.path,
+        after=_snapshot(unit),
+    )
+    return "created"

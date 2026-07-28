@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
+import TemplateLinks from "@/components/TemplateLinks";
 
 type Term = {
   id: string;
@@ -168,6 +169,7 @@ export default function TermsPage() {
           </p>
         )}
       </div>
+      <TemplateLinks only={["sections"]} />
       {error && <p className="error">{error}</p>}
     </div>
   );

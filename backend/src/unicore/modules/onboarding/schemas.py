@@ -5,6 +5,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, Field
 
+from unicore.core.templates import CsvTemplate, register
+
 # Import schema v1 (locked 27-07-2026). ERP-issued roll numbers; ERP ID is an
 # opaque non-empty string.
 CSV_COLUMNS_V1 = (
@@ -18,6 +20,39 @@ CSV_COLUMNS_V1 = (
     "section_label",
     "admission_year",
     "roll_number",
+)
+
+
+register(
+    CsvTemplate(
+        key="students",
+        title="Student import",
+        description="Bulk student provisioning from the ERP, one row per student.",
+        columns=CSV_COLUMNS_V1,
+        example={
+            "erp_id": "ERP-000123",
+            "full_name": "Ananya Raman",
+            "date_of_birth": "15-08-2006",
+            "gender": "F",
+            "mobile": "9876543210",
+            "email": "ananya.r@student.example.edu",
+            "program_code": "BT-CSE",
+            "section_label": "3B",
+            "admission_year": "2026",
+            "roll_number": "21CS1043",
+        },
+        notes=(
+            "Dates are DD-MM-YYYY. Delete these comment lines before uploading if your "
+            "spreadsheet tool keeps them.",
+            "erp_id, full_name, program_code, section_label, admission_year and "
+            "roll_number are mandatory; at least one of mobile/email is required so "
+            "credentials can be delivered.",
+            "program_code must resolve within your scope; the Section must already exist "
+            "for the term you select at upload time.",
+            "Re-uploading the same file is safe: rows are matched on erp_id and updated, "
+            "never duplicated.",
+        ),
+    )
 )
 
 

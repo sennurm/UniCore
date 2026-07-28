@@ -85,6 +85,11 @@ async def find_section(
     return result.scalar_one_or_none()
 
 
+async def get_by_path(session: AsyncSession, path: str) -> OrgUnit | None:
+    result = await session.execute(select(OrgUnit).where(OrgUnit.path == path))
+    return result.scalar_one_or_none()
+
+
 async def path_exists(session: AsyncSession, path: str) -> bool:
     result = await session.execute(select(OrgUnit.id).where(OrgUnit.path == path))
     return result.scalar_one_or_none() is not None
