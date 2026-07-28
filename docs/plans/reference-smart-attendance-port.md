@@ -66,9 +66,35 @@ idea while honouring ATT §5 (pass/fail proximity only, zero location bytes at r
 | `qr_near_expiry` 60→80 s decay window | Stale token = rejection; the rotation interval is the whole window |
 | Staff-vs-student boolean roles | RBAC with org-unit scoping; Class In-charge is the sole correction authority |
 | In-memory liveness token dict | Not needed once face verification is gone; session state lives in Redis |
+| `/api/sync-offline` bulk offline record upload | ATT-FR-05: no offline queueing — scans require live server validation; the endpoint also trusts client-supplied status and score |
 | Client-side geofence coordinates in the QR payload | Venue geofences are server-side master data; coordinates never round-trip through the client |
 
-## 5. Open item for the ATT milestone's SME pass
+## 5. The admin page's "student onboarding" — assessed for ONB
+
+Reviewed at the stakeholder's suggestion (27-07-2026). What the admin/staff
+surface actually provides:
+
+| Reference feature | Verdict for our ONB milestone |
+|---|---|
+| `/api/upload-face`, `/api/face-status`, `/api/delete-face` + the student "Register Face" panel — **this is what onboarding means in that app** | **Not portable** — face-photo capture is the biometric flow we dropped (§4). Nothing here survives |
+| `seed_data()` — 9 hardcoded demo accounts with plaintext-derived passwords | Not portable. Our accounts arrive from the ERP import; credentials are Argon2id with forced first change (already built) |
+| `/api/students` — flat list of `id, username, full_name` for the whole instance | Shape is too thin: no org unit, no Section membership, no ERP id, no state, no campus scoping. Our roster reads are scope-filtered and membership-as-of-date (ONB-FR-10) |
+| `/api/download-report` — CSV via `StringIO` + `Response` with `Content-disposition` | **Reusable pattern** (not code) for ONB's downloadable **error report** (ONB-FR-03) and batch summary export. Ours adds row number, field, reason, raw row |
+| Roster list with a per-student status badge (`has_face` ✅/⚠️) | **Reusable UI pattern** for the ONB batch dashboard's per-student **credential-delivery status** (delivered / failed / pending — ONB-FR-14) |
+| `/api/sync-offline` — bulk-inserts client-supplied offline records | **Rejected**: ATT-FR-05 locks out offline scan queueing (queued scans defeat server-side token freshness and are forgeable). It also trusts client-supplied status/score outright |
+
+**What ONB needs that the reference app has none of:** CSV upload + ERP API feed
+through one validation pipeline, row-level validation with an actionable error
+report, partial-commit semantics, idempotent upsert keyed on ERP ID, in-file
+duplicate detection, the >20 % corrupted-feed guardrail, Section allotment and
+re-allotment with effective dates, campus/Program transfers, withdrawal with
+session revocation, and 20 k rows in under 10 minutes.
+
+**Conclusion:** ONB gets no material head start from this reference. Build it from
+[02-student-onboarding.md](../../requirements/02-student-onboarding.md) as planned;
+borrow only the CSV-download and status-badge patterns noted above.
+
+## 6. Open item for the ATT milestone's SME pass
 
 The **scan-risk score** (§3) is an *addition* to the current ATT requirement, which
 specifies a binary accept / pending-verification / reject outcome. It is not yet
@@ -77,7 +103,7 @@ milestone: decide whether faculty see a ranked pending list (score + flags) or t
 current unranked list, and whether the score is persisted (audit value) or computed
 transiently (data minimization). Do not build it before that decision.
 
-## 6. Sequencing reminder
+## 7. Sequencing reminder
 
 ATT cannot start until:
 - **ONB** provides student accounts + Section membership as-of-date (ONB-FR-10);
