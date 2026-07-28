@@ -33,14 +33,16 @@ function UnitNode({ unit }: { unit: Unit }) {
 
   return (
     <li>
-      <button onClick={toggle}>
+      <button className="tree-toggle" onClick={toggle}>
         {children === null ? "+" : "−"} {unit.name} ({unit.code})
       </button>
-      <span className="badge">{unit.type}</span>
-      {unit.status !== "active" && <span className="badge">{unit.status}</span>}
+      <span className="tag tag-outline" style={{ marginLeft: 6 }}>{unit.type}</span>
+      {unit.status !== "active" && (
+        <span className="tag tag-neutral" style={{ marginLeft: 6 }}>{unit.status}</span>
+      )}
       {children !== null && (
         <ul className="tree">
-          {children.length === 0 && <li className="badge">no children</li>}
+          {children.length === 0 && <li className="tag tag-neutral">no children</li>}
           {children.map((c) => (
             <UnitNode key={c.id} unit={c} />
           ))}
@@ -88,36 +90,70 @@ export default function OrgPage() {
   }
 
   return (
-    <>
-      <h1>Org structure</h1>
-      <div className="panel">
+    <div className="uc-screen">
+      <div>
+        <h3 style={{ margin: 0 }}>Org structure</h3>
+        <div className="uc-screen-sub">
+          University → Faculty Division → School → Department → Program · deactivate, never delete
+        </div>
+      </div>
+      <div className="card">
+        <div className="card-kicker">Hierarchy</div>
         {root === null ? (
-          <p>No university root yet — create one below (type: university, no parent id).</p>
+          <p className="card-body">
+            No university root yet — create one below (type: university, no parent id).
+          </p>
         ) : (
-          <ul className="tree">
+          <ul className="tree" style={{ paddingLeft: 0 }}>
             <UnitNode unit={root} />
           </ul>
         )}
       </div>
-      <div className="panel">
-        <h2>Create unit (Super Admin)</h2>
-        <form onSubmit={createUnit}>
-          <label>Type</label>
-          <select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            {["university", ...Object.values(CHILD_TYPE)].map((t) => (
-              <option key={t}>{t}</option>
-            ))}
-          </select>
-          <label>Name</label>
-          <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
-          <label>Code</label>
-          <input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} required />
-          <label>Parent unit id (empty for university)</label>
-          <input value={form.parent_id} onChange={(e) => setForm({ ...form, parent_id: e.target.value })} />
-          <button type="submit">Create</button>
+      <div className="card">
+        <div className="card-kicker">Create unit · Super Admin</div>
+        <form onSubmit={createUnit} style={{ maxWidth: 380 }}>
+          <div className="field">
+            <label>Type</label>
+            <select
+              className="input"
+              value={form.type}
+              onChange={(e) => setForm({ ...form, type: e.target.value })}
+            >
+              {["university", ...Object.values(CHILD_TYPE)].map((t) => (
+                <option key={t}>{t}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>Name</label>
+            <input
+              className="input"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              required
+            />
+          </div>
+          <div className="field">
+            <label>Code</label>
+            <input
+              className="input"
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value })}
+              required
+            />
+          </div>
+          <div className="field">
+            <label>Parent unit id (empty for university)</label>
+            <input
+              className="input"
+              value={form.parent_id}
+              onChange={(e) => setForm({ ...form, parent_id: e.target.value })}
+            />
+          </div>
+          <button className="btn btn-primary" type="submit">Create</button>
         </form>
         {error && <p className="error">{error}</p>}
       </div>
-    </>
+    </div>
   );
 }

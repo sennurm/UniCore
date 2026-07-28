@@ -34,13 +34,20 @@ export default function AuditPage() {
   }, [load]);
 
   return (
-    <>
-      <h1>Audit log (read-only)</h1>
-      <div className="panel">
-        <label>Filter by action (e.g. rbac.grant.issued)</label>
-        <input value={action} onChange={(e) => setAction(e.target.value)} />
-        <button onClick={() => void load()} className="secondary">Refresh</button>
-        <table>
+    <div className="uc-screen">
+      <div>
+        <h3 style={{ margin: 0 }}>Audit log</h3>
+        <div className="uc-screen-sub">Append-only · every privileged action, with before/after</div>
+      </div>
+      <div className="card">
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", maxWidth: 480 }}>
+          <div className="field" style={{ flex: 1, marginBottom: 0 }}>
+            <label>Filter by action (e.g. rbac.grant.issued)</label>
+            <input className="input" value={action} onChange={(e) => setAction(e.target.value)} />
+          </div>
+          <button onClick={() => void load()} className="btn btn-secondary">Refresh</button>
+        </div>
+        <table className="table" style={{ marginTop: 12 }}>
           <thead>
             <tr><th>When (IST view)</th><th>Actor</th><th>Action</th><th>Object</th><th>Scope</th></tr>
           </thead>
@@ -58,6 +65,6 @@ export default function AuditPage() {
         </table>
         {error && <p className="error">{error}</p>}
       </div>
-    </>
+    </div>
   );
 }

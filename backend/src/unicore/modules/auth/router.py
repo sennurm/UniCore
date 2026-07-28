@@ -66,9 +66,17 @@ async def verify_otp(
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(request: Request) -> MeResponse:
+async def me(request: Request, session: AsyncSession = Depends(get_session)) -> MeResponse:
+    from unicore.modules.user import service as user_service
+
     ctx = _ctx(request)
-    return MeResponse(user_id=ctx.user_id, roles=ctx.role_names)
+    user = await user_service.get_user(session, uuid.UUID(ctx.user_id))
+    return MeResponse(
+        user_id=ctx.user_id,
+        username=user.username,
+        full_name=user.full_name,
+        roles=ctx.role_names,
+    )
 
 
 @router.post("/password", status_code=204)

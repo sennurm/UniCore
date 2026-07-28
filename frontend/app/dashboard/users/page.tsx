@@ -51,33 +51,50 @@ export default function UsersPage() {
   }
 
   return (
-    <>
-      <h1>Provision user</h1>
-      <div className="panel">
+    <div className="uc-screen">
+      <div>
+        <h3 style={{ margin: 0 }}>Provision user</h3>
+        <div className="uc-screen-sub">
+          Accounts are provisioned only — never self-created · temp credential delivered on creation
+        </div>
+      </div>
+      <div className="card" style={{ maxWidth: 420 }}>
+        <div className="card-kicker">New account</div>
         <form onSubmit={provision}>
-          <label>Username</label>
-          <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
-          <label>Full name</label>
-          <input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required />
-          <label>Kind</label>
-          <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
-            <option value="staff">staff</option>
-            <option value="student">student</option>
-          </select>
-          <label>ERP id (students)</label>
-          <input value={form.erp_id} onChange={(e) => setForm({ ...form, erp_id: e.target.value })} />
-          <label>Mobile (for OTP/credentials)</label>
-          <input value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value })} />
-          <button type="submit">Provision + send temp password</button>
+          <div className="field">
+            <label>Username</label>
+            <input className="input" value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} required />
+          </div>
+          <div className="field">
+            <label>Full name</label>
+            <input className="input" value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })} required />
+          </div>
+          <div className="field">
+            <label>Kind</label>
+            <select className="input" value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })}>
+              <option value="staff">staff</option>
+              <option value="student">student</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>ERP id (students)</label>
+            <input className="input" value={form.erp_id} onChange={(e) => setForm({ ...form, erp_id: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Mobile (for OTP/credentials)</label>
+            <input className="input" value={form.mobile} onChange={(e) => setForm({ ...form, mobile: e.target.value })} />
+          </div>
+          <button className="btn btn-primary" type="submit">Provision + send temp password</button>
         </form>
         {created && (
-          <p>
-            Created <strong>{created.username}</strong> ({created.id}), status {created.status}
+          <p className="card-meta">
+            Created <strong>{created.username}</strong> ({created.id}), status{" "}
+            <span className="tag tag-accent">{created.status}</span>
             {delivery && <> — temp password delivered via {delivery}</>}
           </p>
         )}
         {error && <p className="error">{error}</p>}
       </div>
-    </>
+    </div>
   );
 }

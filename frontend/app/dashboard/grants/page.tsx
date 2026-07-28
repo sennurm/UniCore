@@ -58,36 +58,51 @@ export default function GrantsPage() {
   }
 
   return (
-    <>
-      <h1>Roles &amp; grants</h1>
-      <div className="panel">
-        <h2>Issue grant</h2>
+    <div className="uc-screen">
+      <div>
+        <h3 style={{ margin: 0 }}>Roles &amp; grants</h3>
+        <div className="uc-screen-sub">
+          Scoped, time-bound grants · singleton leadership roles change only via supersede
+        </div>
+      </div>
+      <div className="card" style={{ maxWidth: 420 }}>
+        <div className="card-kicker">Issue grant</div>
         <form onSubmit={issue}>
-          <label>User id</label>
-          <input value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} required />
-          <label>Role</label>
-          <select value={form.role_code} onChange={(e) => setForm({ ...form, role_code: e.target.value })}>
+          <div className="field">
+            <label>User id</label>
+            <input className="input" value={form.user_id} onChange={(e) => setForm({ ...form, user_id: e.target.value })} required />
+          </div>
+          <div className="field">
+            <label>Role</label>
+            <select className="input" value={form.role_code} onChange={(e) => setForm({ ...form, role_code: e.target.value })}>
             {ROLES.map((r) => (
               <option key={r}>{r}</option>
             ))}
-          </select>
-          <label>Org unit id (empty for university-scope roles)</label>
-          <input value={form.org_unit_id} onChange={(e) => setForm({ ...form, org_unit_id: e.target.value })} />
-          <label>Term code (class-incharge only, e.g. 2026-S1)</label>
-          <input value={form.term_code} onChange={(e) => setForm({ ...form, term_code: e.target.value })} />
-          <button type="submit">Issue</button>
+            </select>
+          </div>
+          <div className="field">
+            <label>Org unit id (empty for university-scope roles)</label>
+            <input className="input" value={form.org_unit_id} onChange={(e) => setForm({ ...form, org_unit_id: e.target.value })} />
+          </div>
+          <div className="field">
+            <label>Term code (class-incharge only, e.g. 2026-S1)</label>
+            <input className="input" value={form.term_code} onChange={(e) => setForm({ ...form, term_code: e.target.value })} />
+          </div>
+          <button className="btn btn-primary" type="submit">Issue</button>
         </form>
-        {message && <p>{message}</p>}
+        {message && <p className="card-meta">{message}</p>}
       </div>
-      <div className="panel">
-        <h2>User grants</h2>
+      <div className="card">
+        <div className="card-kicker">User grants</div>
         <form onSubmit={lookup}>
-          <label>User id</label>
-          <input value={lookupId} onChange={(e) => setLookupId(e.target.value)} required />
-          <button type="submit" className="secondary">Look up</button>
+          <div className="field">
+            <label>User id</label>
+            <input className="input" value={lookupId} onChange={(e) => setLookupId(e.target.value)} required />
+          </div>
+          <button type="submit" className="btn btn-secondary">Look up</button>
         </form>
         {grants && (
-          <table>
+          <table className="table">
             <thead>
               <tr><th>Role</th><th>Unit</th><th>Status</th><th>Term</th><th>Revoke cause</th></tr>
             </thead>
@@ -96,7 +111,7 @@ export default function GrantsPage() {
                 <tr key={g.id}>
                   <td>{g.role_code}</td>
                   <td>{g.org_unit_id ?? "university"}</td>
-                  <td>{g.status}</td>
+                  <td><span className={g.status === "active" ? "tag tag-accent" : "tag tag-neutral"}>{g.status}</span></td>
                   <td>{g.term_code ?? "—"}</td>
                   <td>{g.revoke_cause ?? "—"}</td>
                 </tr>
@@ -106,6 +121,6 @@ export default function GrantsPage() {
         )}
       </div>
       {error && <p className="error">{error}</p>}
-    </>
+    </div>
   );
 }

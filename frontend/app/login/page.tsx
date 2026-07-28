@@ -26,7 +26,6 @@ export default function LoginPage() {
         force_password_change: boolean | null;
       }>("/auth/login", { method: "POST", body: { username, password } });
       if (res.token) {
-        // OTP disabled in this environment: session issued directly.
         setToken(res.token);
         if (res.force_password_change) setStage("force-change");
         else router.push("/dashboard");
@@ -70,47 +69,87 @@ export default function LoginPage() {
   }
 
   return (
-    <main>
-      <h1>UniCore sign in</h1>
-      <div className="panel">
+    <div className="uc-login">
+      <div className="uc-login-card">
+        <div className="uc-brand" style={{ marginBottom: 4 }}>
+          <div className="uc-brand-name">UniCore</div>
+          <div className="uc-brand-sub">University operations core</div>
+        </div>
         {stage === "password" && (
           <form onSubmit={submitPassword}>
-            <label>Username</label>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} required />
-            <label>Password</label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-            <button type="submit">Continue</button>
+            <div className="card-kicker" style={{ marginBottom: 12 }}>Sign in</div>
+            <div className="field">
+              <label>Username</label>
+              <input
+                className="input"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                autoFocus
+                required
+              />
+            </div>
+            <div className="field">
+              <label>Password</label>
+              <input
+                className="input"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
+            <button className="btn btn-primary" style={{ width: "100%" }} type="submit">
+              Continue
+            </button>
           </form>
         )}
         {stage === "otp" && (
           <form onSubmit={submitOtp}>
-            <p>An OTP was sent to your registered contact.</p>
-            <label>6-digit OTP</label>
-            <input value={code} onChange={(e) => setCode(e.target.value)} maxLength={6} required />
-            <button type="submit">Verify</button>
+            <div className="card-kicker" style={{ marginBottom: 6 }}>One-time password</div>
+            <p className="text-muted" style={{ fontSize: 13 }}>
+              An OTP was sent to your registered contact. It is valid for 5 minutes.
+            </p>
+            <div className="field">
+              <label>6-digit OTP</label>
+              <input
+                className="input"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                maxLength={6}
+                autoFocus
+                required
+              />
+            </div>
+            <button className="btn btn-primary" style={{ width: "100%" }} type="submit">
+              Verify
+            </button>
           </form>
         )}
         {stage === "force-change" && (
           <form onSubmit={submitNewPassword}>
-            <p>First login: choose a new password (minimum 10 characters).</p>
-            <label>New password</label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              minLength={10}
-              required
-            />
-            <button type="submit">Set password</button>
+            <div className="card-kicker" style={{ marginBottom: 6 }}>First login</div>
+            <p className="text-muted" style={{ fontSize: 13 }}>
+              Choose a new password — at least 10 characters.
+            </p>
+            <div className="field">
+              <label>New password</label>
+              <input
+                className="input"
+                type="password"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                minLength={10}
+                autoFocus
+                required
+              />
+            </div>
+            <button className="btn btn-primary" style={{ width: "100%" }} type="submit">
+              Set password
+            </button>
           </form>
         )}
         {error && <p className="error">{error}</p>}
       </div>
-    </main>
+    </div>
   );
 }

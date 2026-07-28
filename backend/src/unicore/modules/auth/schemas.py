@@ -76,4 +76,6 @@ class ConsentIn(BaseModel):
 
 class MeResponse(BaseModel):
     user_id: str
+    username: str
+    full_name: str
     roles: tuple[str, ...]

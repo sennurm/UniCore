@@ -4,10 +4,13 @@ import sys
 import uuid as uuid_mod
 from pathlib import Path
 
-# Must be set before any unicore import caches Settings.
+# Must be set before any unicore import caches Settings. Env vars take
+# precedence over backend/.env, so local dev overrides (e.g. OTP disabled)
+# can never leak into the test suite.
 os.environ.setdefault(
     "UNICORE_DATABASE_URL", "postgresql+asyncpg://unicore:unicore@localhost:5432/unicore_test"
 )
+os.environ["UNICORE_OTP_LOGIN_ENABLED"] = "true"
 
 from collections.abc import AsyncIterator, Callable  # noqa: E402
 
