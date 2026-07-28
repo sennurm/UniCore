@@ -106,21 +106,51 @@ async def test_template_endpoints(make_client) -> None:
 
 
 async def test_downloaded_template_imports_cleanly(make_client) -> None:
-    """The shipped template is a valid upload once its example row is real."""
+    """The shipped sample data is a complete, self-consistent subtree: downloading
+    the template and uploading it unchanged builds the whole example hierarchy."""
     async with make_client("super-admin") as admin:
         await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
-        root_id = (await admin.get("/org/root")).json()["id"]
-        fet = (await admin.post(
-            "/org/units",
-            json={"type": "faculty_division", "name": "FET", "code": "FET", "parent_id": root_id},
-        )).json()
-        await admin.post(
-            "/org/units",
-            json={"type": "school", "name": "SOCE", "code": "SOCE", "parent_id": fet["id"]},
-        )
 
         template = (await admin.get("/templates/org-structure.csv")).text
         result = (await _upload(admin, template.encode())).json()
-    # The template's example row (a Department under UNI.FET.SOCE) applies cleanly.
-    assert result["rows_created"] == 1
-    assert result["rows_rejected"] == 0
+        assert result["rows_rejected"] == 0, result["errors"]
+        assert result["rows_created"] == 6  # FD + School + 2 Depts + 2 Programs
+
+        root_id = (await admin.get("/org/root")).json()["id"]
+        fet = (await admin.get(f"/org/units/{root_id}/children")).json()[0]
+        soce = (await admin.get(f"/org/units/{fet['id']}/children")).json()[0]
+        depts = (await admin.get(f"/org/units/{soce['id']}/children")).json()
+    assert fet["code"] == "FET"
+    assert {d["code"] for d in depts} == {"AIDS", "CSE"}
+
+
+async def test_paths_accept_hyphen_or_underscore(make_client) -> None:
+    """Codes carry hyphens but ltree labels use underscores — both forms resolve."""
+    async with make_client("super-admin") as admin:
+        await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
+        await _upload(admin, (await admin.get("/templates/org-structure.csv")).text.encode())
+
+        rows = [
+            {"type": "program", "code": "BT-IT", "name": "B.Tech IT",
+             "parent_path": "UNI.FET.SOCE.CSE"},
+        ]
+        hyphen = (await _upload(admin, _csv(rows))).json()
+        underscore = (await _upload(
+            admin,
+            _csv([{**rows[0], "code": "BT-SE", "name": "B.Tech SE",
+                   "parent_path": "uni.fet.soce.cse"}]),
+        )).json()
+    assert hyphen["rows_created"] == 1
+    assert underscore["rows_created"] == 1
+
+
+async def test_student_and_section_templates_carry_sample_rows(make_client) -> None:
+    """Templates ship worked sample data, not a lone placeholder row."""
+    async with make_client("system-admin") as staff:
+        for key, minimum in (("students", 4), ("sections", 3), ("org-structure", 6)):
+            body = (await staff.get(f"/templates/{key}.csv")).text
+            data_lines = [
+                ln for ln in body.splitlines() if ln.strip() and not ln.startswith("#")
+            ]
+            assert len(data_lines) - 1 >= minimum, f"{key} has too few sample rows"
+            assert any("SAMPLE DATA" in ln for ln in body.splitlines() if ln.startswith("#"))

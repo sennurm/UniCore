@@ -29,28 +29,72 @@ register(
         title="Student import",
         description="Bulk student provisioning from the ERP, one row per student.",
         columns=CSV_COLUMNS_V1,
-        example={
-            "erp_id": "ERP-000123",
-            "full_name": "Ananya Raman",
-            "date_of_birth": "15-08-2006",
-            "gender": "F",
-            "mobile": "9876543210",
-            "email": "ananya.r@student.example.edu",
-            "program_code": "BT-CSE",
-            "section_label": "3B",
-            "admission_year": "2026",
-            "roll_number": "21CS1043",
-        },
+        examples=(
+            {
+                "erp_id": "ERP-000123",
+                "full_name": "Ananya Raman",
+                "date_of_birth": "15-08-2006",
+                "gender": "F",
+                "mobile": "9876543210",
+                "email": "ananya.r@student.example.edu",
+                "program_code": "BT-CSE",
+                "section_label": "3B",
+                "admission_year": "2026",
+                "roll_number": "21CS1043",
+            },
+            {
+                "erp_id": "ERP-000124",
+                "full_name": "Karthik Subramanian",
+                "date_of_birth": "02-11-2005",
+                "gender": "M",
+                "mobile": "9876543211",
+                "email": "karthik.s@student.example.edu",
+                "program_code": "BT-CSE",
+                "section_label": "3B",
+                "admission_year": "2026",
+                "roll_number": "21CS1044",
+            },
+            {
+                # Mobile only — email may be blank as long as one channel exists.
+                "erp_id": "ERP-000125",
+                "full_name": "Fatima Sheikh",
+                "date_of_birth": "27-03-2006",
+                "gender": "F",
+                "mobile": "9876543212",
+                "email": "",
+                "program_code": "BT-CSE",
+                "section_label": "3A",
+                "admission_year": "2026",
+                "roll_number": "21CS1045",
+            },
+            {
+                # Email only, and a different Program + Section.
+                "erp_id": "ERP-000126",
+                "full_name": "Joseph Mathew",
+                "date_of_birth": "09-06-2006",
+                "gender": "M",
+                "mobile": "",
+                "email": "joseph.m@student.example.edu",
+                "program_code": "BT-AIDS",
+                "section_label": "1A",
+                "admission_year": "2026",
+                "roll_number": "21AD1002",
+            },
+        ),
         notes=(
-            "Dates are DD-MM-YYYY. Delete these comment lines before uploading if your "
-            "spreadsheet tool keeps them.",
-            "erp_id, full_name, program_code, section_label, admission_year and "
-            "roll_number are mandatory; at least one of mobile/email is required so "
-            "credentials can be delivered.",
-            "program_code must resolve within your scope; the Section must already exist "
-            "for the term you select at upload time.",
-            "Re-uploading the same file is safe: rows are matched on erp_id and updated, "
-            "never duplicated.",
+            "SAMPLE DATA — the four rows below show the expected shape (two students "
+            "in one Section, one mobile-only, one email-only in another Program). "
+            "Replace them with your own rows before uploading.",
+            "Mandatory: erp_id, full_name, program_code, section_label, admission_year, "
+            "roll_number. Optional: date_of_birth, gender.",
+            "At least ONE of mobile/email is required — that is how initial credentials "
+            "reach the student. Rows with neither are rejected.",
+            "Dates are DD-MM-YYYY (15-08-2006). Roll numbers come from the ERP and must "
+            "be unique within a Program + admission year.",
+            "program_code must resolve within your scope, and the Section must already "
+            "exist for the term you pick at upload time (see the 'sections' template).",
+            "Re-uploading is safe: rows are matched on erp_id and updated, never "
+            "duplicated.",
         ),
     )
 )

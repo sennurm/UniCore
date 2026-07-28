@@ -16,7 +16,7 @@ class CsvTemplate:
     title: str
     description: str
     columns: tuple[str, ...]
-    example: dict[str, str]
+    examples: tuple[dict[str, str], ...]
     notes: tuple[str, ...] = field(default=())
 
     @property
@@ -29,7 +29,8 @@ class CsvTemplate:
             buffer.write(f"# {note}\n")
         writer = csv.writer(buffer)
         writer.writerow(self.columns)
-        writer.writerow([self.example.get(column, "") for column in self.columns])
+        for example in self.examples:
+            writer.writerow([example.get(column, "") for column in self.columns])
         return buffer.getvalue()
 
 

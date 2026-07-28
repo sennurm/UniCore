@@ -73,12 +73,21 @@ register(
             "at upload time and must already be approved for the owning School."
         ),
         columns=SECTION_CSV_COLUMNS,
-        example={"program_path": "UNI.FET.SOCE.CSE.BT_CSE", "label": "3B"},
+        examples=(
+            {"program_path": "UNI.FET.SOCE.CSE.BT-CSE", "label": "3A"},
+            {"program_path": "UNI.FET.SOCE.CSE.BT-CSE", "label": "3B"},
+            {"program_path": "UNI.FET.SOCE.AIDS.BT-AIDS", "label": "1A"},
+        ),
         notes=(
-            "program_path is the Program's dotted code path.",
+            "SAMPLE DATA — the three rows below create two Sections for one Program and "
+            "one for another. Replace them with your own rows before uploading.",
+            "program_path is the Program's dotted code path, e.g. "
+            "UNI.FET.SOCE.CSE.BT-CSE. Case-insensitive; hyphens and underscores are "
+            "treated the same.",
             "label is the Section name students see, e.g. 3B. Labels may repeat across "
-            "terms — each term gets its own Section instance.",
-            "The School's academic term must be approved before Sections can be created.",
+            "terms — every term gets its own Section instance.",
+            "The School's academic term must be APPROVED before its Sections can be "
+            "created; the term is selected on the upload screen, not in this file.",
         ),
     )
 )

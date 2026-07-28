@@ -53,21 +53,68 @@ register(
             "Sections are created per term by the Timetable Cell, not here."
         ),
         columns=ORG_CSV_COLUMNS,
-        example={
-            "type": "department",
-            "code": "CSE",
-            "name": "Computer Science & Engineering",
-            "parent_path": "UNI.FET.SOCE",
-            "campus_code": "MAIN",
-        },
+        examples=(
+            # A complete, self-consistent subtree: each row's parent_path is built
+            # by the rows above it, so this file imports cleanly as-is under a
+            # university whose code is UNI.
+            {
+                "type": "faculty_division",
+                "code": "FET",
+                "name": "Faculty of Engineering & Technology",
+                "parent_path": "UNI",
+                "campus_code": "MAIN",
+            },
+            {
+                "type": "school",
+                "code": "SOCE",
+                "name": "School of Computational Engineering",
+                "parent_path": "UNI.FET",
+                "campus_code": "MAIN",
+            },
+            {
+                "type": "department",
+                "code": "CSE",
+                "name": "Computer Science & Engineering",
+                "parent_path": "UNI.FET.SOCE",
+                "campus_code": "MAIN",
+            },
+            {
+                "type": "department",
+                "code": "AIDS",
+                "name": "Artificial Intelligence & Data Science",
+                "parent_path": "UNI.FET.SOCE",
+                "campus_code": "MAIN",
+            },
+            {
+                "type": "program",
+                "code": "BT-CSE",
+                "name": "B.Tech Computer Science & Engineering",
+                "parent_path": "UNI.FET.SOCE.CSE",
+                "campus_code": "MAIN",
+            },
+            {
+                "type": "program",
+                "code": "BT-AIDS",
+                "name": "B.Tech Artificial Intelligence & Data Science",
+                "parent_path": "UNI.FET.SOCE.AIDS",
+                "campus_code": "MAIN",
+            },
+        ),
         notes=(
-            "type is one of: faculty_division, school, department, program "
-            "(university is created by bootstrap).",
-            "parent_path is the parent's dotted code path, e.g. UNI.FET.SOCE — "
-            "case-insensitive. Leave blank only for a university row.",
-            "Row order does not matter: the importer creates parents before children.",
-            "Re-uploading is safe — an existing unit at the same parent + code is left "
-            "unchanged (names are updated).",
+            "SAMPLE DATA — the six rows below are a complete worked example "
+            "(Faculty Division -> School -> two Departments -> two Programs). "
+            "Replace them with your own rows before uploading.",
+            "type is one of: faculty_division, school, department, program. "
+            "The university row itself is created by bootstrap, not by this file.",
+            "parent_path is the parent's dotted code path, built from the codes above "
+            "it, e.g. UNI.FET.SOCE. Case-insensitive; hyphens and underscores are "
+            "treated the same (BT-CSE and BT_CSE both match).",
+            "Row order does not matter — the importer creates parents before children.",
+            "campus_code is optional; blank inherits the parent's campus.",
+            "Re-uploading is safe: an existing unit at the same parent + code is left "
+            "unchanged, and only its name is updated.",
+            "Sections are NOT created here — the Timetable Cell creates them per term "
+            "(use the 'sections' template).",
         ),
     )
 )

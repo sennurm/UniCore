@@ -29,6 +29,13 @@ def _label(code: str) -> str:
     return label
 
 
+def normalize_path(path: str) -> str:
+    """Apply the same label rule to every segment of a dotted path, so users may
+    write natural codes (UNI.FET.SOCE.CSE.BT-CSE) even though stored ltree labels
+    replace punctuation with underscores."""
+    return ".".join(_label(segment) for segment in path.split(".") if segment)
+
+
 def _snapshot(unit: OrgUnit) -> dict[str, str | None]:
     return {
         "type": unit.type,
@@ -199,8 +206,8 @@ async def find_section(
 
 
 async def get_unit_by_path(session: AsyncSession, path: str) -> OrgUnit | None:
-    """Path lookup for other modules' bulk importers."""
-    return await dao.get_by_path(session, path)
+    """Path lookup for other modules' bulk importers; accepts natural codes."""
+    return await dao.get_by_path(session, normalize_path(path))
 
 
 async def get_unit_paths(
@@ -399,7 +406,7 @@ async def _import_org_row(
     if not parent_path:
         raise _OrgRowError("parent_path", "mandatory for every non-university row")
 
-    parent = await dao.get_by_path(session, parent_path)
+    parent = await dao.get_by_path(session, normalize_path(parent_path))
     if parent is None:
         raise _OrgRowError("parent_path", f"no org unit at path '{parent_path}'")
     if parent.type != PARENT_TYPE_OF[unit_type]:
