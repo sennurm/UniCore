@@ -14,7 +14,8 @@ const NAV = [
 
 type Me = { user_id: string; username: string; full_name: string; roles: string[] };
 
-function initials(name: string): string {
+function initials(name: string | undefined): string {
+  if (!name) return "··";
   return name
     .split(/\s+/)
     .map((part) => part[0] ?? "")
@@ -62,9 +63,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="uc-user">
           <div className="uc-avatar">{me ? initials(me.full_name) : "··"}</div>
           <div style={{ lineHeight: 1.25 }}>
-            <div style={{ fontSize: 13, fontWeight: 500 }}>{me?.full_name ?? "…"}</div>
+            <div style={{ fontSize: 13, fontWeight: 500 }}>{me?.full_name ?? me?.username ?? "…"}</div>
             <div style={{ fontSize: 11, opacity: 0.55 }}>
-              {me?.roles.length ? me.roles.join(" · ") : me?.username}
+              {me?.roles?.length ? me.roles.join(" · ") : (me?.username ?? "")}
             </div>
           </div>
         </div>
