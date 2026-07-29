@@ -142,7 +142,20 @@ would import as an empty School.
 | Faculty count 7 (body) vs 6 (summary) | Body wins — our seven Divisions match it. Summary line treated as a document error | open question, AUTH §11 |
 | School of Medicine (external college) | Unresolved — imports today as an empty School | open question, AUTH §11 |
 
-## 9. What needs no change
+## 9. Seed data
+
+The document's structure is checked in as a ready-to-upload catalogue:
+[`requirements/sources/takshashila_course_catalogue.csv`](../../requirements/sources/takshashila_course_catalogue.csv)
+— **113 programmes, 6 Faculty Divisions, 13 Schools** (SCOPE and SCORE carry their
+4 real Departments; the other 11 Schools leave the department columns blank and
+receive an auto-created default). `duration_years` holds **academic** years with
+internship counted separately in months, so “4 years incl. 1-year internship”
+becomes 3 + 12. A test uploads this exact file and asserts the resulting tree.
+
+The **School of Medicine** is deliberately omitted pending the scope decision in
+§7 — it has no programmes to import.
+
+## 10. What needs no change
 
 - Five-level hierarchy — **confirmed**
 - Exactly one University — consistent

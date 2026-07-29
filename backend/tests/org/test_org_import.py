@@ -287,3 +287,38 @@ async def test_invalid_category_rejected(make_client) -> None:
         )).json()
     assert result["rows_rejected"] == 1
     assert result["errors"][0]["field"] == "category"
+
+
+async def test_real_university_catalogue_imports(make_client) -> None:
+    """End-to-end: the university's actual catalogue (113 programmes, 6 Faculties,
+    13 Schools — 2 with real Departments, 11 without) imports without errors."""
+    from pathlib import Path
+
+    catalogue = (
+        Path(__file__).resolve().parents[2].parent
+        / "requirements" / "sources" / "takshashila_course_catalogue.csv"
+    )
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        result = (await _upload(admin, catalogue.read_bytes())).json()
+        assert result["rows_rejected"] == 0, result["errors"][:3]
+
+        units = (await admin.get("/org/units", params={"limit": 2000})).json()
+        by_type: dict[str, list[dict]] = {}
+        for u in units:
+            by_type.setdefault(u["type"], []).append(u)
+
+    assert len(by_type["faculty_division"]) == 6
+    assert len(by_type["school"]) == 13
+    assert len(by_type["program"]) == 113
+    # SCOPE has 3 real Departments, SCORE 1; the other 11 Schools get defaults.
+    real = [d for d in by_type["department"] if not d["auto_created"]]
+    defaults = [d for d in by_type["department"] if d["auto_created"]]
+    assert len(real) == 4
+    assert len(defaults) == 11
+
+    programmes = {p["code"]: p for p in by_type["program"]}
+    assert programmes["BT-CSE-CYBER"]["industry_partner"] == "IBM"
+    assert programmes["B-OPTOM"]["internship_months"] == 12
+    assert programmes["B-PHARM"]["lateral_entry_semester"] == 3
+    assert programmes["PHD-TAM"]["category"] == "Research"

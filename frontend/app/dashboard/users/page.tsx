@@ -23,7 +23,8 @@ type RoleImportResult = {
 };
 
 const ROLES = [
-  "system-admin", "chancellor", "vc", "registrar", "dean-academic-affairs",
+  "system-admin", "chancellor", "pro-chancellor", "vc", "registrar",
+  "dean-academic-affairs",
   "faculty-dean", "school-incharge", "hod", "class-incharge", "office-staff",
   "professor", "associate-professor", "assistant-professor", "tutor",
   "assistant-teaching-staff", "timetable-cell", "exam-cell",

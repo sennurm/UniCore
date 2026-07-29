@@ -14,6 +14,11 @@ type Unit = {
   level: string | null;
   duration_years: number | null;
   mode: string | null;
+  category: string | null;
+  industry_partner: string | null;
+  internship_months: number | null;
+  lateral_entry_semester: number | null;
+  auto_created: boolean;
 };
 
 type ImportResult = {
@@ -31,6 +36,12 @@ const LEVELS = [
   "PhD (Full-Time)",
   "PhD (Part-Time)",
   "Diploma/Certificate",
+];
+const CATEGORIES = [
+  "Standard",
+  "Industry Collaborated",
+  "Industry Integrated",
+  "Research",
 ];
 
 export default function OrgPage() {
@@ -73,6 +84,10 @@ export default function OrgPage() {
           level: unit.level,
           duration_years: unit.duration_years,
           mode: unit.mode,
+          category: unit.category,
+          industry_partner: unit.industry_partner,
+          internship_months: unit.internship_months,
+          lateral_entry_semester: unit.lateral_entry_semester,
         },
       });
       setEditing(null);
@@ -133,7 +148,8 @@ export default function OrgPage() {
         <h3 style={{ margin: 0 }}>Org structure</h3>
         <div className="uc-screen-sub">
           One university · Faculty Divisions → Schools → Departments → Programmes ·
-          units are deactivated, never deleted, so history stays intact
+          Departments marked <span className="tag tag-neutral">default</span> were created by the
+          importer for Schools that have none · units are deactivated, never deleted
         </div>
       </div>
 
@@ -192,8 +208,10 @@ export default function OrgPage() {
         <table className="table" style={{ marginTop: 12 }}>
           <thead>
             <tr>
-              <th>Type</th><th>Code</th><th>Name</th><th>Path</th>
-              <th>Level</th><th>Yrs</th><th>Mode</th><th>Status</th><th />
+              <th>Type</th><th>Code</th><th>Name</th>
+              <th>Level</th><th>Yrs</th><th>Mode</th>
+              <th>Category</th><th>Partner</th><th>Intern</th><th>Lateral</th>
+              <th>Status</th><th />
             </tr>
           </thead>
           <tbody>
@@ -208,9 +226,19 @@ export default function OrgPage() {
                     {isEditing ? (
                       <input className="input" value={row.name}
                         onChange={(e) => setEditing({ ...row, name: e.target.value })} />
-                    ) : u.name}
+                    ) : (
+                      <>
+                        {u.name}
+                        {u.auto_created && (
+                          <span className="tag tag-neutral" style={{ marginLeft: 6 }}
+                            title="Created by the importer to carry Programmes for a School that has no Departments">
+                            default
+                          </span>
+                        )}
+                        <div style={{ fontSize: 10, opacity: 0.45 }}>{u.path}</div>
+                      </>
+                    )}
                   </td>
-                  <td style={{ fontSize: 11, opacity: 0.6 }}>{u.path}</td>
                   <td>
                     {isEditing && u.type === "program" ? (
                       <select className="input" value={row.level ?? ""}
@@ -238,6 +266,41 @@ export default function OrgPage() {
                     ) : (u.mode ?? "—")}
                   </td>
                   <td>
+                    {isEditing && u.type === "program" ? (
+                      <select className="input" value={row.category ?? ""}
+                        onChange={(e) => setEditing({ ...row, category: e.target.value })}>
+                        <option value="">—</option>
+                        {CATEGORIES.map((c) => <option key={c}>{c}</option>)}
+                      </select>
+                    ) : (u.category ?? "—")}
+                  </td>
+                  <td>
+                    {isEditing && u.type === "program" ? (
+                      <input className="input" value={row.industry_partner ?? ""}
+                        onChange={(e) => setEditing({ ...row, industry_partner: e.target.value })} />
+                    ) : (u.industry_partner ?? "—")}
+                  </td>
+                  <td>
+                    {isEditing && u.type === "program" ? (
+                      <input className="input" type="number" min={0} max={36}
+                        value={row.internship_months ?? ""}
+                        onChange={(e) => setEditing({
+                          ...row,
+                          internship_months: e.target.value ? Number(e.target.value) : null,
+                        })} />
+                    ) : (u.internship_months ? `${u.internship_months} mo` : "—")}
+                  </td>
+                  <td>
+                    {isEditing && u.type === "program" ? (
+                      <input className="input" type="number" min={1} max={12}
+                        value={row.lateral_entry_semester ?? ""}
+                        onChange={(e) => setEditing({
+                          ...row,
+                          lateral_entry_semester: e.target.value ? Number(e.target.value) : null,
+                        })} />
+                    ) : (u.lateral_entry_semester ? `sem ${u.lateral_entry_semester}` : "—")}
+                  </td>
+                  <td>
                     <span className={u.status === "active" ? "tag tag-accent" : "tag tag-neutral"}>
                       {u.status}
                     </span>
@@ -261,7 +324,7 @@ export default function OrgPage() {
               );
             })}
             {units.length === 0 && (
-              <tr><td colSpan={9} className="card-meta">No units match these filters.</td></tr>
+              <tr><td colSpan={12} className="card-meta">No units match these filters.</td></tr>
             )}
           </tbody>
         </table>
