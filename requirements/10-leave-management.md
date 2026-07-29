@@ -4,7 +4,7 @@ Module code: LVE · Status: DRAFT — pending approval · Last updated: 2026-07-
 
 ## 1. Summary
 
-Leave Management lets every member of the university — students and staff — apply for leave and have it approved through a single-step, hierarchy-routed workflow. The approver is determined by the applicant's position in the reporting chain: **Student → Class In-charge**, **Faculty Member → HoD**, **HoD → School Incharge**, **School Incharge → Faculty Dean**, **Faculty Dean → Dean Academic Affairs**, **Dean Academic Affairs → VC**, **VC / Registrar → Chancellor** (top-of-hierarchy role; **no Pro-Chancellor exists** — removed 25-07-2026 per the university org chart). Two delegation mechanisms exist: **auto-cascade** — if the designated approver is on approved leave overlapping the application date (or the role is vacant), the application routes automatically to *their* reporting person, cascading upward — and **standing delegation** — an approver can open an audited delegation window that routes their queue to their reporting person (Class In-charge → HoD, HoD → School Incharge, School Incharge → Faculty Dean, and so on up the chain). Leave types are a configurable catalog; for students each type's **attendance impact is School-configurable** (counts-as-present, absent, or condonation-evidence for promotion). Staff leave carries **simple balances**: per-type annual quotas decremented on approval and restored on cancellation — accrual, carry-forward, and encashment stay in the external HR system. Approved leave feeds the modules that need it: ATT (student attendance impact), TTM (substitution prompt for faculty on leave), TSK (on-leave flag), and PRM (medical leave as condonation evidence).
+Leave Management lets every member of the university — students and staff — apply for leave and have it approved through a single-step, hierarchy-routed workflow. The approver is determined by the applicant's position in the reporting chain: **Student → Class In-charge**, **Faculty Member → HoD**, **HoD → School Incharge**, **School Incharge → Faculty Dean**, **Faculty Dean → Dean Academic Affairs**, **Dean Academic Affairs → VC**, **VC / Registrar → Pro-Chancellor → Chancellor** (Pro-Chancellor restored 28-07-2026 per the university's published leadership page, which lists **two** holders — the role is not a singleton and either holder may approve; the Chancellor remains terminal). Two delegation mechanisms exist: **auto-cascade** — if the designated approver is on approved leave overlapping the application date (or the role is vacant), the application routes automatically to *their* reporting person, cascading upward — and **standing delegation** — an approver can open an audited delegation window that routes their queue to their reporting person (Class In-charge → HoD, HoD → School Incharge, School Incharge → Faculty Dean, and so on up the chain). Leave types are a configurable catalog; for students each type's **attendance impact is School-configurable** (counts-as-present, absent, or condonation-evidence for promotion). Staff leave carries **simple balances**: per-type annual quotas decremented on approval and restored on cancellation — accrual, carry-forward, and encashment stay in the external HR system. Approved leave feeds the modules that need it: ATT (student attendance impact), TTM (substitution prompt for faculty on leave), TSK (on-leave flag), and PRM (medical leave as condonation evidence).
 
 ## 2. Goals & Non-Goals
 
@@ -14,7 +14,7 @@ Leave Management lets every member of the university — students and staff — 
 - Configurable leave-type catalog with per-type document rules and (for students) School-configurable attendance impact.
 - Simple balance tracking for staff (quota, decrement, restore) with an HR export.
 - Integrations: ATT, TTM substitution prompting, TSK on-leave flag, PRM condonation evidence.
-- Chancellor as a first-class system role topping the reporting chain.
+- Pro-Chancellor (multi-holder) and Chancellor as first-class system roles topping the reporting chain.
 
 **Non-Goals**
 - Full leave accounting (accrual, carry-forward, encashment, loss-of-pay computation) — external HR/payroll owns it; UniCore exports approved-leave data.
@@ -33,8 +33,9 @@ Leave Management lets every member of the university — students and staff — 
 | School Incharge | Approve/reject HoD applications in their School (+ delegated faculty applications); standing delegation to Faculty Dean; School leave calendar |
 | Faculty Dean | Approve/reject School Incharge applications in their Faculty Division (+ delegated HoD applications); standing delegation to Dean Academic Affairs; Division leave calendar |
 | Dean Academic Affairs | Approve/reject Faculty Dean applications (+ delegated); standing delegation to VC; own application routes to the VC |
-| VC / Registrar | VC approves Dean Academic Affairs and Principal/Director applications; VC's and Registrar's own applications route to the Chancellor |
-| Chancellor | **Terminal approver.** Approves/rejects VC and Registrar applications. Minimal-capability account under standard AUTH rules. No Pro-Chancellor exists (removed 25-07-2026) |
+| VC / Registrar | VC approves Dean Academic Affairs applications; VC's and Registrar's own applications route to a **Pro-Chancellor** |
+| Pro-Chancellor | Approves/reject VC and Registrar applications. **Not singleton** — two holders are documented (28-07-2026); either may approve, and both appear as holders in the reporting API |
+| Chancellor | **Terminal approver.** Approves/rejects Pro-Chancellor applications. Minimal-capability account under standard AUTH rules |
 | Admin/office staff & non-teaching support | Applicant rights; approver = their unit head per the AUTH role-registry unit-head map (locked 24-07-2026) |
 | System Admin / HR designate | Configure leave-type catalog, quotas, retro window; manage the HR export; no approval powers |
 
@@ -57,7 +58,7 @@ Leave Management lets every member of the university — students and staff — 
 
 ### Business rules
 
-1. **Routing map (locked, revised 25-07-2026):** Student → Class In-charge of their Section; Faculty Member (any teaching grade) → HoD of their Department; HoD → School Incharge of their School; School Incharge → Faculty Dean of their Division; Faculty Dean → Dean Academic Affairs; Dean Academic Affairs → VC; **Principal/Director → VC** (role existence flagged open — absent from the org chart); VC and Registrar → Chancellor. Admin/office staff and non-teaching support → their **unit head** per the AUTH role-registry unit-head map (e.g., Exam Cell staff → Controller of Examination → Registrar; Department office staff → HoD; wardens → Dean Student Welfare). The Chancellor is terminal — no cascade above.
+1. **Routing map (locked, revised 28-07-2026):** Student → Class In-charge of their Section; Faculty Member (any teaching grade) → HoD of their Department; HoD → School Incharge of their School; School Incharge → Faculty Dean of their Division; Faculty Dean → Dean Academic Affairs; Dean Academic Affairs → VC; VC and Registrar → **Pro-Chancellor**; Pro-Chancellor → Chancellor. **Principals are School Incharges by another name** and route as such — they are not a separate chain tier. Admin/office staff and non-teaching support → their **unit head** per the AUTH role-registry unit-head map (e.g., Exam Cell staff → Controller of Examination → Registrar; Department office staff → HoD; wardens → Dean Student Welfare). The Chancellor is terminal — no cascade above.
 2. **Reporting chain is AUTH-owned:** LVE resolves approvers via the AUTH reporting-chain configuration (AUTH-FR-18) — role-level, university-configurable, also used by TSK escalation. LVE never hardcodes names.
 3. **Auto-cascade (extended 24-07-2026):** at routing time (application submit AND whenever the queue is re-evaluated), if the resolved approver level is skippable, the application routes to their reporting person, recursively. A level is skippable when (a) the holder has *approved* leave overlapping today-through-decision (`on-leave`), or (b) the role has **no active holder** (`vacant-role` — e.g., the window between term-closure revoking a Class In-charge and the new term's designation). If the applicant has **no Section at all** (promoted, pre-allotment), resolution starts at the HoD of the Department owning their Program (`no-section`). Every hop and its cause is recorded on the application. Cascade uses approved leave only — a pending application never diverts someone's queue. **Vacancy alert:** when applications cascade past the same vacant role for more than 5 working days (University-configurable), the role's designating authority (per AUTH) and System Admin are alerted.
 4. **Standing delegation:** an approver may open a delegation window (start/end date) routing their entire queue to their reporting person; overlapping windows are rejected; the window and every application routed under it are audited. Delegation does not transfer any other power — only the leave-approval queue.
@@ -121,7 +122,7 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 - LVE-FR-13: PRM integration: approved `condonation-evidence` leave auto-attaches to any condonation request for the overlapping term (PRM-FR-07).
 - LVE-FR-14: Leave calendars per approver scope (names + dates + type, no reasons/documents); Department/School roll-ups.
 - LVE-FR-15: HR export of approved/cancelled staff leave with balance state and exceeds-balance excess, on schedule + on demand.
-- LVE-FR-16: Chancellor role: singleton per University (AUTH-FR-16), minimal default capability set (leave approvals + anything explicitly granted later). No Pro-Chancellor role exists (removed 25-07-2026 per the org chart).
+- LVE-FR-16: Chancellor role: singleton per University (AUTH-FR-16), minimal default capability set (leave approvals + anything explicitly granted later). **Pro-Chancellor** sits between VC/Registrar and the Chancellor and is **not** singleton-enforced — two holders are documented, and an application routes to whichever is available (both appear as holders in the reporting API).
 
 ## 8. Edge Cases, Worst Cases & Decisions
 
@@ -155,7 +156,7 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 
 ## 10. Assumptions
 
-- The reporting chain (AUTH-FR-18) is configured before LVE go-live: Class In-charge → HoD → School Incharge → Faculty Dean → Dean Academic Affairs → VC → Chancellor, with Registrar → Chancellor, Principal/Director → VC, and the unit-head map for non-academic staff.
+- The reporting chain (AUTH-FR-18) is configured before LVE go-live: Class In-charge → HoD → School Incharge → Faculty Dean → Dean Academic Affairs → VC → Pro-Chancellor → Chancellor, with Registrar → Pro-Chancellor and the unit-head map for non-academic staff. Principals route as School Incharges.
 - The Chancellor account follows standard AUTH provisioning (password + OTP); its minimal capability set is leave approval unless explicitly extended.
 - Staff joining mid-year get pro-rated quotas from the HR feed, or full quota if HR provides none (flagged in the export).
 - The campus calendar (TTM) is the single working-day source for balance arithmetic and retro windows.
@@ -163,7 +164,7 @@ Every application, routing hop (with cause: designated / cascade / delegation), 
 
 ## 11. Open Questions
 
-- ~~Principals/Directors routing~~ — **resolved 24-07-2026:** Principal/Director → VC (business rule 1, AUTH-FR-18).
+- ~~Principals/Directors routing~~ — **revised 28-07-2026:** Principal is a School-level title ("equal to school incharge" per the university structure document), so Principals route as School Incharges to their Faculty Dean — not to the VC.
 - ~~Admin/office staff and non-teaching support routing~~ — **resolved 24-07-2026:** unit head per the AUTH role-registry unit-head map.
 - Medical-document retention: proposed 3 years for documents, 7+ years for the decision record; needs registrar/legal confirmation.
 - Should students see a leave-days-taken counter (transparency) even where no quota is set? Proposed: yes.

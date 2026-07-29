@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Enum,
     ForeignKey,
@@ -70,6 +71,15 @@ class OrgUnit(Base):
     level: Mapped[str | None] = mapped_column(String(40), nullable=True)
     duration_years: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    industry_partner: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    # Internship sits outside timetabled Sessions (ATT/PRM care); lateral entrants
+    # join mid-programme (ONB cares).
+    internship_months: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    lateral_entry_semester: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # True when the importer created this unit to satisfy the hierarchy rather
+    # than because the university named it (see AUTH-FR-19 default Departments).
+    auto_created: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

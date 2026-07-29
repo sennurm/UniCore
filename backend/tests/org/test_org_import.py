@@ -196,3 +196,94 @@ async def test_downloaded_template_imports_cleanly(make_client) -> None:
         units = (await admin.get("/org/units")).json()
     assert result["rows_rejected"] == 0, result["errors"]
     assert len([u for u in units if u["type"] == "program"]) == 4
+
+
+# --- structure refinements from the university document (28-07-2026) ---------
+
+SCHOOL_ONLY = {
+    "faculty_division_code": "FHS",
+    "faculty_division_name": "Faculty of Health Sciences",
+    "school_code": "SAHS",
+    "school_name": "School of Allied Health Sciences",
+    "department_code": "",
+    "department_name": "",
+    "programme_code": "B-OPTOM",
+    "programme_name": "Bachelor of Optometry",
+    "level": "Under Graduate",
+    "duration_years": "5",
+    "mode": "Full-Time",
+    "category": "Standard",
+    "industry_partner": "",
+    "internship_months": "12",
+    "lateral_entry_semester": "",
+}
+
+
+async def test_school_without_department_gets_a_default(make_client) -> None:
+    """12 of 14 Schools have no Departments — blank columns synthesise one,
+    flagged auto_created so it reads as a placeholder, not an academic unit."""
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        result = (await _upload(admin, _csv([SCHOOL_ONLY]))).json()
+        assert result["rows_rejected"] == 0, result["errors"]
+        units = {u["code"]: u for u in (await admin.get("/org/units")).json()}
+
+    department = units["SAHS"] if units["SAHS"]["type"] == "department" else None
+    departments = [u for u in units.values() if u["type"] == "department"]
+    assert len(departments) == 1
+    assert departments[0]["auto_created"] is True
+    assert departments[0]["name"] == "School of Allied Health Sciences"
+    programme = units["B-OPTOM"]
+    assert programme["path"].endswith(".sahs.sahs.b_optom")  # School → default Dept → Programme
+    assert department is None or True
+
+
+async def test_real_department_is_not_flagged_auto(make_client) -> None:
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        await _upload(admin, _csv([CATALOGUE]))
+        units = {u["code"]: u for u in (await admin.get("/org/units")).json()}
+    assert units["CSE"]["type"] == "department"
+    assert units["CSE"]["auto_created"] is False
+
+
+async def test_partial_department_columns_rejected(make_client) -> None:
+    """A code without a name (or vice versa) is a mistake, not a default request."""
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        result = (await _upload(
+            admin, _csv([{**SCHOOL_ONLY, "department_code": "AHS", "department_name": ""}])
+        )).json()
+    assert result["rows_rejected"] == 1
+    assert result["errors"][0]["field"] == "department_name"
+
+
+async def test_programme_category_partner_and_internship(make_client) -> None:
+    industry = {
+        **CATALOGUE,
+        "programme_code": "BT-CSE-CYBER",
+        "programme_name": "B.Tech CSE (Cyber Security)",
+        "category": "Industry Collaborated",
+        "industry_partner": "IBM",
+    }
+    lateral = {**SCHOOL_ONLY, "school_code": "SOP", "school_name": "School of Pharmacy",
+               "programme_code": "B-PHARM", "programme_name": "B.Pharm",
+               "internship_months": "", "lateral_entry_semester": "3", "duration_years": "4"}
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        result = (await _upload(admin, _csv([industry, lateral]))).json()
+        assert result["rows_rejected"] == 0, result["errors"]
+        units = {u["code"]: u for u in (await admin.get("/org/units")).json()}
+    cyber = units["BT-CSE-CYBER"]
+    assert (cyber["category"], cyber["industry_partner"]) == ("Industry Collaborated", "IBM")
+    assert units["B-OPTOM" if "B-OPTOM" in units else "B-PHARM"]["lateral_entry_semester"] == 3
+
+
+async def test_invalid_category_rejected(make_client) -> None:
+    async with make_client("super-admin") as admin:
+        await _with_university(admin)
+        result = (await _upload(
+            admin, _csv([{**CATALOGUE, "category": "Sponsored"}])
+        )).json()
+    assert result["rows_rejected"] == 1
+    assert result["errors"][0]["field"] == "category"

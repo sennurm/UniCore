@@ -12,6 +12,9 @@ from unicore.core.db import Base
 # Singleton-per-unit leadership roles (AUTH-FR-16). Mirrored in the partial
 # unique indexes of migration 0002 — change both together.
 UNIT_SINGLETON_ROLES = ("hod", "school-incharge", "faculty-dean", "class-incharge")
+# `pro-chancellor` is deliberately absent: the university's leadership page
+# lists TWO holders, so multiple active grants are the documented reality
+# (locked 28-07-2026 — see docs/reviews/org-structure-vs-university-document.md).
 UNIVERSITY_SINGLETON_ROLES = (
     "chancellor",
     "vc",

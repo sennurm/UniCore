@@ -19,7 +19,11 @@ from unicore.core.security import AuthContext
 from unicore.modules.audit import service as audit_service
 from unicore.modules.org import dao
 from unicore.modules.org.models import PARENT_TYPE_OF, OrgUnit
-from unicore.modules.org.schemas import ORG_CSV_COLUMNS, OrgUnitCreate
+from unicore.modules.org.schemas import (
+    ORG_CSV_COLUMNS,
+    PROGRAMME_CATEGORIES,
+    OrgUnitCreate,
+)
 
 
 def _label(code: str) -> str:
@@ -395,17 +399,42 @@ async def _import_catalogue_row(
     creating or updating each level. Returns per-level counts."""
     counts = {"created": 0, "updated": 0, "unchanged": 0}
     parent = root
+
     for unit_type, code_field, name_field in (
         ("faculty_division", "faculty_division_code", "faculty_division_name"),
         ("school", "school_code", "school_name"),
-        ("department", "department_code", "department_name"),
-        ("program", "programme_code", "programme_name"),
     ):
-        code = _required(row, code_field)
-        name = _required(row, name_field)
-        attrs = _programme_attrs(row) if unit_type == "program" else {}
-        parent, outcome = await _upsert_unit(session, ctx, parent, unit_type, code, name, attrs)
+        parent, outcome = await _upsert_unit(
+            session, ctx, parent, unit_type, _required(row, code_field),
+            _required(row, name_field), {},
+        )
         counts[outcome] += 1
+
+    # Department is OPTIONAL (locked 28-07-2026): 12 of the university's 14
+    # Schools have none, so a blank department column synthesises a default
+    # Department mirroring the School, flagged auto_created so the org table can
+    # show it as a structural placeholder rather than a real academic unit.
+    school = parent
+    dept_code = row.get("department_code", "").strip()
+    dept_name = row.get("department_name", "").strip()
+    if bool(dept_code) != bool(dept_name):
+        raise _OrgRowError(
+            "department_code" if not dept_code else "department_name",
+            "give both department columns or neither (blank creates a default Department)",
+        )
+    auto = not dept_code
+    if auto:
+        dept_code, dept_name = school.code, school.name
+    parent, outcome = await _upsert_unit(
+        session, ctx, school, "department", dept_code, dept_name, {}, auto_created=auto
+    )
+    counts[outcome] += 1
+
+    parent, outcome = await _upsert_unit(
+        session, ctx, parent, "program", _required(row, "programme_code"),
+        _required(row, "programme_name"), _programme_attrs(row),
+    )
+    counts[outcome] += 1
     return counts
 
 
@@ -414,20 +443,35 @@ def _programme_attrs(row: dict[str, str]) -> dict[str, object]:
 
     level = row.get("level", "").strip()
     mode = row.get("mode", "").strip()
-    duration = row.get("duration_years", "").strip()
+    category = row.get("category", "").strip()
     if level and level not in PROGRAMME_LEVELS:
         raise _OrgRowError("level", f"must be one of: {', '.join(PROGRAMME_LEVELS)}")
     if mode and mode not in PROGRAMME_MODES:
         raise _OrgRowError("mode", f"must be one of: {', '.join(PROGRAMME_MODES)}")
-    years: int | None = None
-    if duration:
-        try:
-            years = int(float(duration))
-        except ValueError:
-            raise _OrgRowError("duration_years", "must be a whole number of years") from None
-        if not 1 <= years <= 10:
-            raise _OrgRowError("duration_years", "outside the plausible range (1–10)")
-    return {"level": level or None, "duration_years": years, "mode": mode or None}
+    if category and category not in PROGRAMME_CATEGORIES:
+        raise _OrgRowError("category", f"must be one of: {', '.join(PROGRAMME_CATEGORIES)}")
+    return {
+        "level": level or None,
+        "mode": mode or None,
+        "category": category or None,
+        "industry_partner": row.get("industry_partner", "").strip() or None,
+        "duration_years": _whole_number(row, "duration_years", 1, 10),
+        "internship_months": _whole_number(row, "internship_months", 0, 36),
+        "lateral_entry_semester": _whole_number(row, "lateral_entry_semester", 1, 12),
+    }
+
+
+def _whole_number(row: dict[str, str], field: str, low: int, high: int) -> int | None:
+    raw = row.get(field, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(float(raw))
+    except ValueError:
+        raise _OrgRowError(field, "must be a whole number") from None
+    if not low <= value <= high:
+        raise _OrgRowError(field, f"outside the plausible range ({low}–{high})")
+    return value
 
 
 async def _upsert_unit(
@@ -438,6 +482,7 @@ async def _upsert_unit(
     code: str,
     name: str,
     attrs: dict[str, object],
+    auto_created: bool = False,
 ) -> tuple[OrgUnit, str]:
     path = f"{parent.path}.{_label(code)}"
     existing = await dao.get_by_path(session, path)
@@ -479,6 +524,7 @@ async def _upsert_unit(
         parent_id=parent.id,
         path=path,
         campus_code=parent.campus_code,
+        auto_created=auto_created,
         **attrs,
     )
     session.add(unit)
@@ -503,7 +549,17 @@ async def update_unit(
     unit = await _get_or_404(session, unit_id)
     before = _snapshot(unit)
     applied = False
-    for key in ("name", "level", "duration_years", "mode", "campus_code"):
+    for key in (
+        "name",
+        "level",
+        "duration_years",
+        "mode",
+        "category",
+        "industry_partner",
+        "internship_months",
+        "lateral_entry_semester",
+        "campus_code",
+    ):
         if key in changes and changes[key] is not None and getattr(unit, key) != changes[key]:
             if key != "name" and unit.type != "program":
                 raise HTTPException(
