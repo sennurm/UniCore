@@ -4,7 +4,7 @@ STUDENT = {
     "username": "r.kumar",
     "full_name": "R. Kumar",
     "kind": "student",
-    "erp_id": "ERP-000123",
+    "sif_id": "SIF-000123",
 }
 
 

@@ -10,7 +10,8 @@ type DirectoryRow = {
   full_name: string;
   kind: string;
   status: string;
-  erp_id: string | null;
+  sif_id: string | null;
+  enrollment_id: string | null;
   roles: RoleEntry[];
 };
 
@@ -43,7 +44,7 @@ export default function UsersAndRolesPage() {
   const [importResult, setImportResult] = useState<RoleImportResult | null>(null);
   const [creating, setCreating] = useState(false);
   const [newUser, setNewUser] = useState({
-    username: "", full_name: "", kind: "staff", erp_id: "", mobile: "",
+    username: "", full_name: "", kind: "staff", sif_id: "", mobile: "",
   });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -77,7 +78,7 @@ export default function UsersAndRolesPage() {
           username: newUser.username,
           full_name: newUser.full_name,
           kind: newUser.kind,
-          erp_id: newUser.erp_id || null,
+          sif_id: newUser.sif_id || null,
           mobile: newUser.mobile || null,
         },
       });
@@ -85,7 +86,7 @@ export default function UsersAndRolesPage() {
         `/auth/users/${user.id}/temp-password`, { method: "POST" },
       );
       setMessage(`Provisioned ${newUser.username}; temp password sent via ${issued.delivered_via}`);
-      setNewUser({ username: "", full_name: "", kind: "staff", erp_id: "", mobile: "" });
+      setNewUser({ username: "", full_name: "", kind: "staff", sif_id: "", mobile: "" });
       setCreating(false);
       await load();
     } catch (err) {
@@ -157,7 +158,7 @@ export default function UsersAndRolesPage() {
       <div className="card">
         <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
           <div className="field" style={{ marginBottom: 0, maxWidth: 220 }}>
-            <label>Search name, username or ERP id</label>
+            <label>Search name, username, SIF or enrollment id</label>
             <input className="input" value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
           <div className="field" style={{ marginBottom: 0, maxWidth: 200 }}>
@@ -224,13 +225,23 @@ export default function UsersAndRolesPage() {
 
         <table className="table" style={{ marginTop: 12 }}>
           <thead>
-            <tr><th>Username</th><th>Name</th><th>Kind</th><th>Status</th><th>Roles</th><th /></tr>
+            <tr>
+              <th>Username</th><th>Name</th><th>Enrollment / SIF</th>
+              <th>Kind</th><th>Status</th><th>Roles</th><th />
+            </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.user_id}>
                 <td>{r.username}</td>
                 <td>{r.full_name}</td>
+                <td>
+                  {r.enrollment_id && <strong>{r.enrollment_id}</strong>}
+                  {r.sif_id && (
+                    <div style={{ fontSize: 11, opacity: 0.55 }}>{r.sif_id}</div>
+                  )}
+                  {!r.enrollment_id && !r.sif_id && "—"}
+                </td>
                 <td>{r.kind}</td>
                 <td>
                   <span className={r.status === "active" ? "tag tag-accent" : "tag tag-neutral"}>
@@ -257,7 +268,7 @@ export default function UsersAndRolesPage() {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={6} className="card-meta">No users match these filters.</td></tr>
+              <tr><td colSpan={7} className="card-meta">No users match these filters.</td></tr>
             )}
           </tbody>
         </table>

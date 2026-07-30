@@ -559,7 +559,8 @@ async def directory(
                 "full_name": user.full_name,
                 "kind": user.kind,
                 "status": user.status,
-                "erp_id": user.erp_id,
+                "sif_id": user.sif_id,
+                "enrollment_id": user.enrollment_id,
                 "roles": entries,
             }
         )

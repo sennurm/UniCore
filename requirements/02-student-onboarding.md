@@ -57,10 +57,13 @@ System Admin / Super Admin hold University scope and therefore cross everything.
 
 ### Business rules
 
-1. **ERP ID is the identity join key.** Every row must carry it; matching is by ERP ID only — never by name.
-2. **Idempotent upsert:** an incoming row whose ERP ID exists updates the existing record (changed fields only, all diffs audited); it never creates a duplicate. Re-running an entire batch is safe.
+1. **Two one-to-one student identifiers (locked 28-07-2026).**
+   - **SIF id** — issued when admission completes, so it exists from day one. It is the **import join key**: every student row must carry it, and matching is by SIF only — never by name.
+   - **Enrollment No** — the student's **canonical identifier** (what the university and its reports refer to), but issued weeks or months *after* admission. It is optional until issued, **unique university-wide**, and correctable afterwards with a before/after audit record.
+   Both resolve the same student: search and directory reads accept either, and once an enrollment number exists an import row carrying it matches that student too. Enrollment No leads in rosters, the user directory and exports; SIF is shown as the secondary reference.
+2. **Idempotent upsert:** an incoming row whose SIF id exists updates the existing record (changed fields only, all diffs audited); it never creates a duplicate. Re-running an entire batch is safe.
 3. A student is created in state `IMPORTED`; moves to `ACTIVE` once credential delivery is initiated. (No consent gate — all students are 18+ per locked policy; UniCore's own DPDP consent is captured at first login per the AUTH doc.)
-4. Roll numbers are **imported from the ERP** (see Open Questions) and unique within a Program + admission year; a collision rejects the row.
+4. Roll numbers are **imported from the ERP** and unique within a Program + admission year; a collision rejects the row. Roll number is the Programme-scoped academic number and is distinct from both the SIF id and the university-wide Enrollment No.
 5. Section allotment is per Program term; re-allotment closes the old membership with an effective date (history preserved — attendance stays attached to the old Section's Sessions).
 6. Transfers create a new org-unit mapping with effective date; the old mapping is closed, never deleted. Roll number handling on transfer follows the ERP's decision carried in the transfer record.
 7. Withdrawal sets state `WITHDRAWN`, revokes sessions immediately (AUTH), removes the student from future Sessions, and preserves all history for statutory retention. Re-joining reactivates the same account (AUTH business rule 1).
@@ -101,10 +104,10 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 ## 7. Functional Requirements
 
 - ONB-FR-01: Bulk import via CSV upload and via ERP API feed against a versioned schema; both paths share one validation pipeline.
-- ONB-FR-02: Row-level validation: mandatory fields present, ERP ID format, valid campus/School/Department/Program/Section codes, DOB plausibility, roll-number uniqueness, contact format.
+- ONB-FR-02: Row-level validation: mandatory fields present, SIF id present, valid campus/School/Department/Program/Section codes, DOB plausibility, roll-number uniqueness, contact format.
 - ONB-FR-03: **Partial-commit semantics:** valid rows commit, invalid rows go to a per-batch error report (row number, field, reason, raw row). All-or-nothing is NOT used — see §8 for rationale.
-- ONB-FR-04: Idempotent upsert keyed on ERP ID; per-row outcome (created/updated/unchanged/rejected) in the batch summary.
-- ONB-FR-05: In-file duplicate detection: two rows with the same ERP ID in one file — first valid row wins, later rows rejected to the error report as in-file duplicates.
+- ONB-FR-04: Idempotent upsert keyed on SIF id; per-row outcome (created/updated/unchanged/rejected) in the batch summary.
+- ONB-FR-05: In-file duplicate detection: two rows with the same SIF id in one file — first valid row wins, later rows rejected to the error report as in-file duplicates.
 - ONB-FR-06: Account provisioning into `IMPORTED` state; activation pipeline: credential generation → delivery (SMS primary, email fallback) → `ACTIVE`.
 - ONB-FR-07: **Section-instance dependency:** section allotment (bulk or single) targets only Section instances of the current term created by the Timetable Cell (TTM-FR-19); a row or allotment referencing a Section with no instance for the target term is rejected with `section-not-created`, pointing to the Timetable Cell. Sections are never auto-created from import data.
 - ONB-FR-08: Roll-number import and uniqueness enforcement (Program + admission year).
@@ -116,6 +119,7 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 - ONB-FR-14: Batch dashboard: per-batch counts, error-report download, credential-delivery status (delivered/failed/pending) per student.
 - ONB-FR-15: All operations org-scoped per §4; operations crossing an actor's subtree are restricted to System Admin.
 - ONB-FR-16: **Upload template** — the student CSV template is downloadable in-app, generated from the same column definition the validator uses (per the overview's bulk-upload baseline) and carrying worked sample rows that demonstrate the mandatory fields, the DD-MM-YYYY date format, and the at-least-one-contact-channel rule.
+- ONB-FR-18: **Enrollment-number assignment.** Enrollment numbers are uploaded in their own two-column file (`sif_id`, `enrollment_id`) through the shared import pipeline — partial commit, error report, idempotent re-upload — and may also be set per student. Rules: unique university-wide (a clash names the current holder), in-file duplicates rejected, an unknown SIF rejected, and a correction to an already-issued number permitted and audited before/after. The number may alternatively be supplied in the student import when already known.
 - ONB-FR-17: **Section roster read** — a Section's roster as of any date, powered by the dated membership history (ONB-FR-10), showing each student's account state and credential-delivery status; consumed by the onboarding dashboard and later by TTM/ATT.
 
 ## 8. Edge Cases, Worst Cases & Decisions
@@ -123,9 +127,9 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 | Case | Decision |
 |---|---|
 | File contains some invalid rows | **Partial commit** (valid rows in, invalid rows to error report). Rationale: at 15,000+ students, all-or-nothing lets one typo block an entire campus go-live; idempotent upsert (ONB-FR-04) makes fix-and-re-import of just the failed rows safe and cheap. |
-| Same batch imported twice (double click, retry after timeout) | Idempotent upsert — second run reports all rows `unchanged`; zero duplicates. File hash shown in batch history so staff can see it was a re-run. |
-| Two rows in one file share an ERP ID | First valid row processed, subsequent rejected as in-file duplicates (ONB-FR-05). No silent last-write-wins. |
-| Row's ERP ID exists but name/DOB wildly differ | Update is applied (ERP is master) but flagged `identity-warning` in the batch report for human review. |
+| Same batch imported twice (double click, retry after timeout) | Idempotent upsert on SIF — second run reports all rows `unchanged`; zero duplicates. File hash shown in batch history so staff can see it was a re-run. |
+| Two rows in one file share a SIF id | First valid row processed, subsequent rejected as in-file duplicates (ONB-FR-05). No silent last-write-wins. |
+| Row's SIF id exists but name/DOB wildly differ | Update is applied (ERP is master) but flagged `identity-warning` in the batch report for human review. |
 | Invalid Program/Section code | Row rejected to error report. Codes are never auto-created from import data — org structure is configured, not imported. |
 | Missing mandatory field (e.g., no mobile AND no email) | Row rejected: with no contact channel, credentials cannot be delivered. Error report says which channel is missing. |
 | Credential SMS fails | Automatic email fallback; if both fail, student stays `ACTIVE` but flagged `delivery-failed` in the dashboard; office staff hand out credentials in person via a printed one-time slip (audited). Login still forces password change, so the slip is single-use in effect. |
@@ -134,6 +138,7 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 | Re-allotment after attendance has been captured | Past Sessions/attendance stay with the old Section (memberships are dated, ONB-FR-10); only future obligations move. Never retro-rewritten. |
 | Transfer while the student has open grievances or pending device change | Transfer proceeds; grievances and device requests follow the student (they attach to the account, not the org mapping). |
 | Withdrawal reversed (student returns) | Reactivate the same account (never a new one); prior roll number restored if still unique, else the ERP issues a new one in the next import. |
+| Enrollment number issued to the wrong student | Correct it by re-uploading the right pairing — the number moves, both changes audited. A number already held by another student is rejected naming that holder, so a silent steal is impossible. |
 | Student imported at Campus A appears in Campus B's file | Second file's row rejected with `scope-conflict` unless it is a System Admin-executed transfer; campus staff cannot silently poach records across campuses. |
 | Worst case: malformed/oversized file (wrong encoding, 500 MB junk) | Pre-parse gate: size cap 50 MB, UTF-8 required, header row must match schema version — file rejected whole at this gate (this is the only whole-file rejection) with a clear reason. |
 | Worst case: ERP sends a corrupted feed that would "update" thousands of records | Batch guardrail: if >20% of rows in a batch would change org mapping or DOB, the batch pauses in `NEEDS-REVIEW` and requires System Admin confirmation before committing. |
@@ -149,7 +154,7 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 
 ## 10. Assumptions
 
-- The ERP export includes: ERP ID, name, DOB, gender, mobile, email, campus/School/Department/Program codes, admission year, roll number. Section may be assigned in UniCore if absent from the file.
+- The ERP export includes: SIF id, name, DOB, gender, mobile, email, campus/School/Department/Program codes, admission year, roll number, and the Enrollment No where already issued. Section may be assigned in UniCore if absent from the file.
 - All admitted students are 18 or older (university admission policy, locked 24-07-2026); DOB is never age-checked.
 - The admission-time ERP notice covers the disclosure of student data to UniCore for provisioning; UniCore's own DPDP consent is captured at first login (AUTH doc).
 - ERP is the system of record for identity fields and roll numbers; UniCore is the system of record for account state, Section membership, and device registration.
@@ -159,7 +164,7 @@ Every batch (who, when, file hash, row counts: created/updated/rejected), every 
 
 - ~~Roll-number source~~ — **resolved 27-07-2026: ERP-issued roll numbers are imported**; UniCore enforces uniqueness within Program + admission year and rejects collisions to the error report.
 - ~~ERP API feed~~ — **resolved 27-07-2026: CSV upload only for MVP.** The API feed lands later as an adapter over the same validation pipeline.
-- **ERP ID format** — resolved 27-07-2026 as an opaque non-empty string (≤100 chars); tighten per-School validation only if the ERP team confirms a stable pattern.
+- **Identifier formats** — SIF id and Enrollment No are both opaque non-empty strings (≤100 chars); tighten validation only if the ERP team confirms stable patterns.
 - Should Class In-charge receive a notification on re-allotment into/out of their Section? Proposed: yes, in-app notification, post-MVP email digest.
 
 ## 12. Flow Diagram
@@ -196,7 +201,11 @@ flowchart TD
 | TC-ONB-001 | Clean bulk import creates accounts | Happy | P0 | Valid 100-row CSV, new ERP IDs | Upload, run import | 100 accounts `IMPORTED`→`ACTIVE`, credentials sent, batch audited | ONB-FR-01/06, US-ONB-1 |
 | TC-ONB-002 | Partial commit with error report | Happy | P0 | 100 rows, 5 invalid | Run import | 95 committed; error report lists 5 rows with field + reason | ONB-FR-03, US-ONB-1 |
 | TC-ONB-003 | Re-import same file is idempotent | Happy | P0 | TC-ONB-001 completed | Upload identical file again | All rows `unchanged`; zero duplicates | ONB-FR-04, §8 |
-| TC-ONB-004 | In-file duplicate ERP ID | Negative | P0 | File with same ERP ID twice | Run import | First row processed, second rejected as in-file duplicate | ONB-FR-05 |
+| TC-ONB-004 | In-file duplicate SIF id | Negative | P0 | File with same SIF id twice | Run import | First row processed, second rejected as in-file duplicate | ONB-FR-05 |
+| TC-ONB-017 | Enrollment numbers assigned after admission | Happy | P0 | Students onboarded with SIF only | Upload (sif_id, enrollment_id) file | Numbers assigned and audited; untouched students unaffected; re-upload reports unchanged | ONB-FR-18 |
+| TC-ONB-018 | Enrollment number unique university-wide | Negative | P0 | TU2026CSE0001 held by student A | Assign the same number to student B | Row rejected naming the current holder; batch continues | ONB-FR-18 |
+| TC-ONB-019 | Enrollment correction audited | Boundary | P1 | Student holds a mistyped number | Upload the corrected number | Value replaced; audit record carries before/after | ONB-FR-18 |
+| TC-ONB-020 | Either identifier finds the student | Access | P1 | Student with both ids | Search the directory by SIF, then by Enrollment No | Both return the same student | ONB business rule 1 |
 | TC-ONB-005 | Invalid Program code rejected | Negative | P0 | Row with unknown Program code | Run import | Row in error report; no org unit auto-created | ONB-FR-02, §8 |
 | TC-ONB-006 | Missing both contact channels | Negative | P1 | Row without mobile and email | Run import | Row rejected: no credential-delivery channel | ONB-FR-02, §8 |
 | TC-ONB-007 | Allotment to a Section with no current-term instance rejected | Negative | P0 | Section "3B" exists for last term only; new term instance not yet created by Timetable Cell | Attempt allotment of a student to "3B" for the new term | Rejected with `section-not-created` pointing to the Timetable Cell; no membership written | ONB-FR-07, TTM-FR-19 |

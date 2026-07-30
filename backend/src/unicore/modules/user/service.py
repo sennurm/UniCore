@@ -2,7 +2,7 @@
 
 Covers AUTH-FR-01: accounts are provisioned only (admin action here; ONB bulk
 import arrives in milestone 2). AUTH business rule 1: re-joining users are
-REACTIVATED, never duplicated — matched on ERP ID.
+REACTIVATED, never duplicated — matched on SIF id.
 """
 
 import uuid
@@ -21,7 +21,8 @@ from unicore.modules.user.schemas import UserCreate
 def _snapshot(user: User) -> dict[str, str | None]:
     return {
         "username": user.username,
-        "erp_id": user.erp_id,
+        "sif_id": user.sif_id,
+        "enrollment_id": user.enrollment_id,
         "full_name": user.full_name,
         "kind": user.kind,
         "status": user.status,
@@ -29,20 +30,20 @@ def _snapshot(user: User) -> dict[str, str | None]:
 
 
 async def provision_user(session: AsyncSession, ctx: AuthContext, data: UserCreate) -> User:
-    if data.erp_id is not None:
-        existing = await dao.get_by_erp_id(session, data.erp_id)
+    if data.sif_id is not None:
+        existing = await dao.get_by_sif_id(session, data.sif_id)
         if existing is not None:
             if existing.status in ("deactivated", "withdrawn"):
                 return await _reactivate(session, ctx, existing, data)
             raise HTTPException(
-                status_code=409, detail=f"An active user with ERP ID {data.erp_id} exists."
+                status_code=409, detail=f"An active user with SIF ID {data.sif_id} exists."
             )
     if await dao.get_by_username(session, data.username) is not None:
         raise HTTPException(status_code=409, detail="Username already taken.")
 
     user = User(
         username=data.username,
-        erp_id=data.erp_id,
+        sif_id=data.sif_id,
         full_name=data.full_name,
         email=data.email,
         mobile=data.mobile,
@@ -114,7 +115,7 @@ async def provision_student(
     *,
     username: str,
     full_name: str,
-    erp_id: str,
+    sif_id: str,
     email: str | None = None,
     mobile: str | None = None,
 ) -> User:
@@ -128,7 +129,7 @@ async def provision_student(
         username = f"{username}.{uuid.uuid4().hex[:4]}"
     user = User(
         username=username,
-        erp_id=erp_id,
+        sif_id=sif_id,
         full_name=full_name,
         email=email,
         mobile=mobile,
@@ -156,8 +157,44 @@ async def list_users(
     return list(await dao.list_users(session, search, status, limit))
 
 
-async def get_by_erp_id(session: AsyncSession, erp_id: str) -> User | None:
-    return await dao.get_by_erp_id(session, erp_id)
+async def get_by_sif_id(session: AsyncSession, sif_id: str) -> User | None:
+    """SIF is the identity join key — present from admission (ONB business rule 1)."""
+    return await dao.get_by_sif_id(session, sif_id)
+
+
+async def get_by_enrollment_id(session: AsyncSession, enrollment_id: str) -> User | None:
+    """Enrollment No is the student's canonical identifier once issued."""
+    return await dao.get_by_enrollment_id(session, enrollment_id)
+
+
+async def set_enrollment_id(
+    session: AsyncSession, ctx: AuthContext, user: User, enrollment_id: str
+) -> bool:
+    """Assign or correct the enrollment number (issued after admission).
+
+    University-wide unique; a correction is allowed and audited before/after.
+    Returns True when the value actually changed.
+    """
+    if user.enrollment_id == enrollment_id:
+        return False
+    holder = await dao.get_by_enrollment_id(session, enrollment_id)
+    if holder is not None and holder.id != user.id:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Enrollment ID {enrollment_id} already belongs to {holder.username}.",
+        )
+    before = _snapshot(user)
+    user.enrollment_id = enrollment_id
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="user.enrollment-id.assigned",
+        object_type="user",
+        object_id=str(user.id),
+        before=before,
+        after=_snapshot(user),
+    )
+    return True
 
 
 async def get_by_username(session: AsyncSession, username: str) -> User | None:

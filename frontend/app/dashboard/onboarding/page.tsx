@@ -21,7 +21,8 @@ type RowError = { row_number: number; field: string; reason: string; raw_row: st
 
 type RosterRow = {
   user_id: string;
-  erp_id: string | null;
+  sif_id: string | null;
+  enrollment_id: string | null;
   full_name: string;
   status: string;
   roll_number: string | null;
@@ -41,6 +42,13 @@ export default function OnboardingPage() {
   const [selected, setSelected] = useState<Batch | null>(null);
   const [errors, setErrors] = useState<RowError[] | null>(null);
   const [sectionId, setSectionId] = useState("");
+  const [enrolFile, setEnrolFile] = useState<File | null>(null);
+  const [enrolResult, setEnrolResult] = useState<{
+    rows_assigned: number;
+    rows_unchanged: number;
+    rows_rejected: number;
+    errors: { row_number: number; field: string; reason: string }[];
+  } | null>(null);
   const [roster, setRoster] = useState<RosterRow[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -99,6 +107,24 @@ export default function OnboardingPage() {
     }
   }
 
+  async function importEnrollmentIds(e: React.FormEvent) {
+    e.preventDefault();
+    if (!enrolFile) return;
+    setBusy(true);
+    setError("");
+    setEnrolResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", enrolFile);
+      setEnrolResult(await upload("/onboarding/enrollment-ids", form));
+      if (sectionId) setRoster(await api<RosterRow[]>(`/onboarding/sections/${sectionId}/roster`));
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function loadRoster(e: React.FormEvent) {
     e.preventDefault();
     setError("");
@@ -136,13 +162,54 @@ export default function OnboardingPage() {
           </button>
         </form>
         <p className="card-meta" style={{ marginTop: 8 }}>
-          Columns: erp_id, full_name, date_of_birth (DD-MM-YYYY), gender, mobile, email,
-          program_code, section_label, admission_year, roll_number
+          Columns: sif_id, full_name, date_of_birth (DD-MM-YYYY), gender, mobile, email,
+          program_code, section_label, admission_year, roll_number. The enrollment number is
+          issued later — upload it separately below.
         </p>
         {message && <p className="card-meta">{message}</p>}
       </div>
 
-      <TemplateLinks only={["students"]} />
+      <div className="card" style={{ maxWidth: 520 }}>
+        <div className="card-kicker">Enrollment numbers</div>
+        <p className="card-meta">
+          <strong>Enrollment No</strong> is the student's canonical identifier, but it is
+          issued after admission — students onboard with their <strong>SIF id</strong> and get
+          their enrollment number here, matched on SIF. Re-uploading is safe, and correcting a
+          number is allowed and audited.
+        </p>
+        <form onSubmit={importEnrollmentIds}>
+          <div className="field">
+            <label>Enrollment numbers CSV (sif_id, enrollment_id)</label>
+            <input className="input" type="file" accept=".csv,text/csv"
+              onChange={(e) => setEnrolFile(e.target.files?.[0] ?? null)} required />
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={busy || !enrolFile}>
+            {busy ? "Assigning…" : "Assign enrollment numbers"}
+          </button>
+        </form>
+        {enrolResult && (
+          <p className="card-meta">
+            {enrolResult.rows_assigned} assigned · {enrolResult.rows_unchanged} unchanged ·{" "}
+            {enrolResult.rows_rejected} rejected
+          </p>
+        )}
+        {enrolResult && enrolResult.errors.length > 0 && (
+          <table className="table">
+            <thead><tr><th>Row</th><th>Field</th><th>Reason</th></tr></thead>
+            <tbody>
+              {enrolResult.errors.map((e, i) => (
+                <tr key={i}>
+                  <td>{e.row_number}</td>
+                  <td><span className="tag tag-outline">{e.field}</span></td>
+                  <td>{e.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <TemplateLinks only={["students", "enrollment-ids"]} />
 
       <div className="card">
         <div className="card-kicker">Batches</div>
@@ -228,14 +295,24 @@ export default function OnboardingPage() {
         {roster && (
           <table className="table" style={{ marginTop: 12 }}>
             <thead>
-              <tr><th>Roll</th><th>Name</th><th>ERP id</th><th>Account</th><th>Credentials</th></tr>
+              <tr>
+                <th>Enrollment No</th><th>Name</th><th>Roll</th><th>SIF id</th>
+                <th>Account</th><th>Credentials</th>
+              </tr>
             </thead>
             <tbody>
               {roster.map((r) => (
                 <tr key={r.user_id}>
-                  <td>{r.roll_number ?? "—"}</td>
+                  <td>
+                    {r.enrollment_id ? (
+                      <strong>{r.enrollment_id}</strong>
+                    ) : (
+                      <span className="tag tag-neutral">not issued</span>
+                    )}
+                  </td>
                   <td>{r.full_name}</td>
-                  <td>{r.erp_id ?? "—"}</td>
+                  <td>{r.roll_number ?? "—"}</td>
+                  <td style={{ fontSize: 12, opacity: 0.7 }}>{r.sif_id ?? "—"}</td>
                   <td><span className="tag tag-neutral">{r.status}</span></td>
                   <td>
                     <span className={DELIVERY_TAG[r.credential_delivery ?? "pending"]}>
@@ -245,7 +322,7 @@ export default function OnboardingPage() {
                 </tr>
               ))}
               {roster.length === 0 && (
-                <tr><td colSpan={5} className="card-meta">No students in this Section today.</td></tr>
+                <tr><td colSpan={6} className="card-meta">No students in this Section today.</td></tr>
               )}
             </tbody>
           </table>

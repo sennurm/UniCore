@@ -10,7 +10,7 @@ class UserCreate(BaseModel):
     username: str = Field(min_length=3, max_length=100, pattern=r"^[a-z0-9._-]+$")
     full_name: str = Field(min_length=1, max_length=200)
     kind: str = Field(pattern=r"^(student|staff)$")
-    erp_id: str | None = Field(default=None, max_length=100)
+    sif_id: str | None = Field(default=None, max_length=100)
     email: str | None = None
     mobile: str | None = None
 
@@ -20,7 +20,8 @@ class UserOut(BaseModel):
 
     id: uuid.UUID
     username: str
-    erp_id: str | None
+    sif_id: str | None
+    enrollment_id: str | None
     full_name: str
     email: str | None
     mobile: str | None

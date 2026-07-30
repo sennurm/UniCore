@@ -2,7 +2,7 @@
 
 Import-only provisioning (ONB): students arrive from the ERP as CSV, are validated
 row by row, committed partially (valid rows in, invalid rows to a downloadable error
-report), and upserted idempotently on ERP ID. Sections are per-term instances
+report), and upserted idempotently on SIF id. Sections are per-term instances
 created by the Timetable Cell; allotment is dated so history stays immutable.
 """
 
@@ -27,7 +27,11 @@ from unicore.modules.onboarding.models import (
     SectionMembership,
     StudentProfile,
 )
-from unicore.modules.onboarding.schemas import CSV_COLUMNS_V1, SingleStudentAdd
+from unicore.modules.onboarding.schemas import (
+    CSV_COLUMNS_V1,
+    ENROLLMENT_CSV_COLUMNS,
+    SingleStudentAdd,
+)
 from unicore.modules.org import service as org_service
 from unicore.modules.rbac import service as rbac_service
 from unicore.modules.user import service as user_service
@@ -79,7 +83,7 @@ async def import_csv(
     await session.flush()
 
     scope_paths = await rbac_service.scope_paths_for(ctx, IMPORT_ROLES)
-    seen_erp_ids: set[str] = set()
+    seen_sif_ids: set[str] = set()
     created = updated = unchanged = rejected = 0
     risky_changes = 0
 
@@ -87,10 +91,10 @@ async def import_csv(
         for index, raw in enumerate(reader, start=2):  # row 1 is the header
             row = {k: (v or "").strip() for k, v in raw.items() if k}
             try:
-                erp_id = _require(row, "erp_id")
-                if erp_id in seen_erp_ids:
-                    raise RowError("erp_id", "in-file duplicate — first occurrence wins")
-                seen_erp_ids.add(erp_id)
+                sif_id = _require(row, "sif_id")
+                if sif_id in seen_sif_ids:
+                    raise RowError("sif_id", "in-file duplicate — first occurrence wins")
+                seen_sif_ids.add(sif_id)
                 outcome, risky = await _upsert_row(session, ctx, row, term_code, scope_paths)
             except RowError as err:
                 rejected += 1
@@ -170,7 +174,8 @@ async def _upsert_row(
     scope_paths: list[str] | None,
 ) -> tuple[str, bool]:
     """Validate and upsert one row. Returns (outcome, risky_change)."""
-    erp_id = _require(row, "erp_id")
+    sif_id = _require(row, "sif_id")
+    enrollment_id = row.get("enrollment_id", "").strip()
     full_name = _require(row, "full_name")
     roll_number = _require(row, "roll_number")
     program_code = _require(row, "program_code")
@@ -190,14 +195,19 @@ async def _upsert_row(
             f"no Section '{section_label}' for term {term_code} — Timetable Cell must create it",
         )
 
-    existing = await user_service.get_by_erp_id(session, erp_id)
+    # SIF is the join key at admission (the only id that exists then); once an
+    # enrollment number is issued either id resolves the same student, so a file
+    # carrying enrollment_id still matches (canonical-id decision, 28-07-2026).
+    existing = await user_service.get_by_sif_id(session, sif_id)
+    if existing is None and enrollment_id:
+        existing = await user_service.get_by_enrollment_id(session, enrollment_id)
     if existing is None:
         user = await user_service.provision_student(
             session,
             ctx,
-            username=_username_for(roll_number, erp_id),
+            username=_username_for(roll_number, sif_id),
             full_name=full_name,
-            erp_id=erp_id,
+            sif_id=sif_id,
             email=email,
             mobile=mobile,
         )
@@ -212,6 +222,8 @@ async def _upsert_row(
                 gender=row.get("gender") or None,
             )
         )
+        if enrollment_id:
+            await user_service.set_enrollment_id(session, ctx, user, enrollment_id)
         await session.flush()
         await _reallot(session, user.id, section.id, date.today())
         return "created", False
@@ -238,6 +250,10 @@ async def _upsert_row(
         if profile.roll_number != roll_number:
             profile.roll_number = roll_number
             changed = True
+    if enrollment_id and await user_service.set_enrollment_id(
+        session, ctx, existing, enrollment_id
+    ):
+        changed = True
     membership = await dao.open_membership(session, existing.id)
     if membership is None or membership.section_id != section.id:
         await _reallot(session, existing.id, section.id, date.today())
@@ -291,8 +307,8 @@ def _parse_date(value: str) -> date | None:
     raise RowError("date_of_birth", "must be DD-MM-YYYY")
 
 
-def _username_for(roll_number: str, erp_id: str) -> str:
-    base = "".join(ch for ch in roll_number.lower() if ch.isalnum()) or erp_id.lower()
+def _username_for(roll_number: str, sif_id: str) -> str:
+    base = "".join(ch for ch in roll_number.lower() if ch.isalnum()) or sif_id.lower()
     return base[:100]
 
 
@@ -305,7 +321,7 @@ async def add_single_student(
     """Mid-term add through the identical validation path as a bulk row."""
     scope_paths = await rbac_service.scope_paths_for(ctx, IMPORT_ROLES)
     row = {
-        "erp_id": data.erp_id,
+        "sif_id": data.sif_id,
         "full_name": data.full_name,
         "date_of_birth": data.date_of_birth.strftime("%d-%m-%Y") if data.date_of_birth else "",
         "gender": data.gender or "",
@@ -315,12 +331,13 @@ async def add_single_student(
         "section_label": data.section_label,
         "admission_year": str(data.admission_year),
         "roll_number": data.roll_number,
+        "enrollment_id": data.enrollment_id or "",
     }
     try:
         await _upsert_row(session, ctx, row, data.term_code, scope_paths)
     except RowError as err:
         raise HTTPException(status_code=422, detail=f"{err.field}: {err.reason}") from None
-    user = await user_service.get_by_erp_id(session, data.erp_id)
+    user = await user_service.get_by_sif_id(session, data.sif_id)
     assert user is not None
     await session.commit()
     return user.id
@@ -474,7 +491,8 @@ async def section_roster(
         roster.append(
             {
                 "user_id": str(user.id),
-                "erp_id": user.erp_id,
+                "sif_id": user.sif_id,
+                "enrollment_id": user.enrollment_id,
                 "full_name": user.full_name,
                 "status": user.status,
                 "roll_number": profile.roll_number if profile else None,
@@ -535,3 +553,85 @@ __all__ = [
     "transfer_student",
     "withdraw_student",
 ]
+
+
+# --- enrollment numbers (issued after admission) -----------------------------
+
+
+async def import_enrollment_ids(
+    session: AsyncSession, ctx: AuthContext, content: bytes
+) -> dict[str, object]:
+    """Assign enrollment numbers to already-onboarded students, matched on SIF.
+
+    Partial commit like every other import: valid rows land, invalid rows return
+    an error report. Re-uploading is safe; correcting a number is allowed and
+    audited (ONB-FR-18).
+    """
+    if not content:
+        raise HTTPException(status_code=422, detail="File is empty.")
+    try:
+        text_content = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
+
+    body = "\n".join(
+        line for line in text_content.splitlines() if not line.lstrip().startswith("#")
+    )
+    reader = csv.DictReader(io.StringIO(body))
+    missing = set(ENROLLMENT_CSV_COLUMNS) - {h.strip() for h in (reader.fieldnames or [])}
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Header must include: {', '.join(sorted(missing))}.",
+        )
+
+    assigned = unchanged = 0
+    errors: list[dict[str, object]] = []
+    seen: set[str] = set()
+
+    for row_number, raw in enumerate(reader, start=2):
+        row = {k: (v or "").strip() for k, v in raw.items() if k}
+        if not any(row.values()):
+            continue
+        sif_id = row.get("sif_id", "")
+        enrollment_id = row.get("enrollment_id", "")
+        try:
+            if not sif_id or not enrollment_id:
+                raise RowError(
+                    "sif_id" if not sif_id else "enrollment_id", "mandatory field is missing"
+                )
+            if enrollment_id in seen:
+                raise RowError("enrollment_id", "in-file duplicate — enrollment ids are unique")
+            seen.add(enrollment_id)
+            student = await user_service.get_by_sif_id(session, sif_id)
+            if student is None:
+                raise RowError("sif_id", f"no student with SIF id '{sif_id}'")
+            changed = await user_service.set_enrollment_id(session, ctx, student, enrollment_id)
+            assigned += 1 if changed else 0
+            unchanged += 0 if changed else 1
+        except RowError as err:
+            errors.append(
+                {
+                    "row_number": row_number,
+                    "field": err.field,
+                    "reason": err.reason,
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items() if v),
+                }
+            )
+        except HTTPException as err:  # e.g. the number belongs to another student
+            errors.append(
+                {
+                    "row_number": row_number,
+                    "field": "enrollment_id",
+                    "reason": str(err.detail),
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items() if v),
+                }
+            )
+    await session.commit()
+    return {
+        "rows_total": assigned + unchanged + len(errors),
+        "rows_assigned": assigned,
+        "rows_unchanged": unchanged,
+        "rows_rejected": len(errors),
+        "errors": errors,
+    }

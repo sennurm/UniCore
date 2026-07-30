@@ -77,7 +77,7 @@ def csv_bytes(rows: list[dict[str, str]]) -> bytes:
 
 def student_row(n: int, **overrides: str) -> dict[str, str]:
     row = {
-        "erp_id": f"ERP-{n:05d}",
+        "sif_id": f"SIF-{n:05d}",
         "full_name": f"Student {n}",
         "date_of_birth": "15-08-2006",
         "gender": "F",

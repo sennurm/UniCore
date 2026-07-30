@@ -32,7 +32,7 @@ async def test_partial_commit_with_error_report(make_client, campus) -> None:
     """TC-ONB-002/006: good rows commit; bad rows land in a downloadable report."""
     rows = [
         student_row(1),
-        student_row(2, erp_id=""),                       # missing mandatory field
+        student_row(2, sif_id=""),                       # missing mandatory field
         student_row(3, mobile="", email=""),             # no contact channel
         student_row(4, program_code="NOPE"),             # unknown program
         student_row(5, section_label="9Z"),              # section not created
@@ -46,7 +46,7 @@ async def test_partial_commit_with_error_report(make_client, campus) -> None:
 
         errors = (await staff.get(f"/onboarding/imports/{batch['id']}/errors")).json()
         fields = {e["field"] for e in errors}
-        assert fields == {"erp_id", "mobile/email", "program_code", "section_label",
+        assert fields == {"sif_id", "mobile/email", "program_code", "section_label",
                           "admission_year"}
 
         report = await staff.get(f"/onboarding/imports/{batch['id']}/errors.csv")

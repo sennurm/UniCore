@@ -13,9 +13,16 @@ async def get_by_id(session: AsyncSession, user_id: uuid.UUID) -> User | None:
     return await session.get(User, user_id)
 
 
-async def get_by_erp_id(session: AsyncSession, erp_id: str) -> User | None:
-    result = await session.execute(select(User).where(User.erp_id == erp_id))
-    return result.scalar_one_or_none()
+async def get_by_sif_id(session: AsyncSession, sif_id: str) -> User | None:
+    return (
+        await session.execute(select(User).where(User.sif_id == sif_id))
+    ).scalar_one_or_none()
+
+
+async def get_by_enrollment_id(session: AsyncSession, enrollment_id: str) -> User | None:
+    return (
+        await session.execute(select(User).where(User.enrollment_id == enrollment_id))
+    ).scalar_one_or_none()
 
 
 async def get_by_username(session: AsyncSession, username: str) -> User | None:
@@ -50,7 +57,8 @@ async def list_users(
         query = query.where(
             func.lower(User.username).like(pattern)
             | func.lower(User.full_name).like(pattern)
-            | func.lower(func.coalesce(User.erp_id, "")).like(pattern)
+            | func.lower(func.coalesce(User.sif_id, "")).like(pattern)
+            | func.lower(func.coalesce(User.enrollment_id, "")).like(pattern)
         )
     result = await session.execute(query)
     return result.scalars().all()

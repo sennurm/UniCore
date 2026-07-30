@@ -33,6 +33,8 @@ University
 |---|---|
 | Faculty Division | Academic grouping (never plain "Faculty" — avoids collision with teachers). The university's own documents call these **Faculties**; stakeholders also say **Faculty Streams** — same level, seven of them |
 | Faculty Member | A teacher |
+| SIF id | Student identifier issued when admission completes — present from day one, so it is the **import join key** |
+| Enrollment No | The student's **canonical identifier**, issued after admission; unique university-wide, leads in rosters/exports, one-to-one with the SIF id |
 | Section | A class group of students within a program term |
 | Class In-charge | Faculty Member designated as owner of a Section |
 | Period | One timetabled teaching slot |

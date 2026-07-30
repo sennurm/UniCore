@@ -17,18 +17,27 @@ USER_STATUSES = ("imported", "active", "deactivated", "withdrawn")
 class User(Base):
     __tablename__ = "users"
     __table_args__ = (
-        # ERP ID is the identity join key; unique when present (staff may have none).
+        # SIF id is the identity join key — issued when admission completes, so it
+        # exists from day one. Unique when present (staff have none).
         Index(
-            "uq_users_erp_id",
-            "erp_id",
+            "uq_users_sif_id",
+            "sif_id",
             unique=True,
-            postgresql_where=text("erp_id IS NOT NULL"),
+            postgresql_where=text("sif_id IS NOT NULL"),
+        ),
+        # Enrollment id arrives later; university-wide unique once issued.
+        Index(
+            "uq_users_enrollment_id",
+            "enrollment_id",
+            unique=True,
+            postgresql_where=text("enrollment_id IS NOT NULL"),
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    erp_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    sif_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    enrollment_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     full_name: Mapped[str] = mapped_column(String(200), nullable=False)
     email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     mobile: Mapped[str | None] = mapped_column(String(20), nullable=True)

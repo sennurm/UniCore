@@ -13,6 +13,7 @@ from unicore.modules.onboarding import service
 from unicore.modules.onboarding.schemas import (
     AllotRequest,
     BatchOut,
+    EnrollmentImportResult,
     RowErrorOut,
     SingleStudentAdd,
     TransferRequest,
@@ -86,6 +87,19 @@ async def deliver_credentials(
     ctx: AuthContext = Depends(require_permission("onb:import")),
 ) -> dict[str, int]:
     return await service.deliver_credentials(session, ctx, batch_id)
+
+
+@router.post("/enrollment-ids", response_model=EnrollmentImportResult)
+async def import_enrollment_ids(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("onb:import")),
+) -> EnrollmentImportResult:
+    """Assign enrollment numbers (issued after admission) matched on SIF id."""
+    content = await file.read()
+    return EnrollmentImportResult.model_validate(
+        await service.import_enrollment_ids(session, ctx, content)
+    )
 
 
 @router.post("/students", status_code=201)

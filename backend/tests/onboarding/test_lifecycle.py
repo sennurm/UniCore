@@ -117,7 +117,7 @@ async def test_single_student_add_uses_same_pipeline(make_client, campus) -> Non
         good = await staff.post(
             "/onboarding/students",
             json={
-                "erp_id": "ERP-99999",
+                "sif_id": "SIF-99999",
                 "full_name": "Late Joiner",
                 "program_code": "BT-CSE",
                 "section_label": "3A",
@@ -132,7 +132,7 @@ async def test_single_student_add_uses_same_pipeline(make_client, campus) -> Non
         bad = await staff.post(
             "/onboarding/students",
             json={
-                "erp_id": "ERP-99998",
+                "sif_id": "SIF-99998",
                 "full_name": "Wrong Program",
                 "program_code": "DOES-NOT-EXIST",
                 "section_label": "3A",
