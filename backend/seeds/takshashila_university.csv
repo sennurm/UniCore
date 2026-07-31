@@ -1,11 +1,18 @@
-# Takshashila University course catalogue — generated from
-# Takshashila_University_Schools_and_Programmes_Updated.docx (July 2026).
-# Ready to upload on Org structure -> Bulk upload.
+# SEED — Takshashila University org structure.
+# University root: "Takshashila University" (code TU) — created by the seeder,
+# not by this file; every row below hangs beneath it.
+# Generated from Takshashila_University_Schools_and_Programmes_Updated.docx
+# (July 2026). 6 Faculty Divisions, 13 Schools, 15 Departments, 113 Programmes.
+#
+# Load with:  make seed        (python -m unicore.seed)
+# or upload on Org structure -> Bulk upload — same validation pipeline either way.
+#
 # Only SCOPE and SCORE have real Departments; the other Schools leave the
 # department columns blank and get a default Department (flagged auto-created).
 # duration_years = ACADEMIC years, internship counted separately in months.
 # The School of Medicine (external Takshashila Medical College) is omitted
-# pending the scope decision recorded in the review.
+# pending the scope decision recorded in
+# docs/reviews/org-structure-vs-university-document.md §7.
 faculty_division_code,faculty_division_name,school_code,school_name,department_code,department_name,programme_code,programme_name,level,duration_years,mode,category,industry_partner,internship_months,lateral_entry_semester
 FET,Faculty of Engineering & Technology,SCOPE,School of Computational Engineering,CSE,Computer Science & Engineering,BT-CSE,B.Tech - Computer Science & Engineering,Under Graduate,4,Full-Time,Standard,,,
 FET,Faculty of Engineering & Technology,SCOPE,School of Computational Engineering,CSE,Computer Science & Engineering,BT-IT,B.Tech - Information Technology,Under Graduate,4,Full-Time,Standard,,,

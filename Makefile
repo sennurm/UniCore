@@ -1,5 +1,6 @@
 # UniCore — local development
-# Quick start:  make install  ->  make up  ->  make migrate  ->  make bootstrap  ->  make api (+ make web)
+# Quick start:  make install -> make up -> make migrate -> make bootstrap -> make seed
+#               -> make api (+ make web)
 
 SHELL := /bin/bash
 BACKEND := backend
@@ -9,14 +10,16 @@ PY := $(VENV)/bin/python
 PIP := $(VENV)/bin/pip
 
 # Bootstrap defaults — override like: make bootstrap UNIVERSITY_NAME="My University"
-UNIVERSITY_NAME ?= Demo University
-UNIVERSITY_CODE ?= UNI
+UNIVERSITY_NAME ?= Takshashila University
+UNIVERSITY_CODE ?= TU
 ADMIN_USERNAME  ?= sadmin
 ADMIN_FULLNAME  ?= Super Admin
+# Org structure seed — override like: make seed CATALOGUE=path/to/other.csv
+CATALOGUE       ?= seeds/takshashila_university.csv
 
 .DEFAULT_GOAL := help
 
-.PHONY: help install up down migrate bootstrap api web test lint type check build-web clean db-shell redis-cli
+.PHONY: help install up down migrate bootstrap seed api web test lint type check build-web clean db-shell redis-cli
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "\nUniCore targets:\n\n"} /^[a-zA-Z_-]+:.*?##/ {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2} END {print ""}' $(MAKEFILE_LIST)
@@ -41,6 +44,11 @@ bootstrap: ## Create university root + Super Admin (idempotent; prints initial p
 	cd $(BACKEND) && .venv/bin/python -m unicore.bootstrap \
 		--university-name "$(UNIVERSITY_NAME)" --university-code "$(UNIVERSITY_CODE)" \
 		--admin-username "$(ADMIN_USERNAME)" --admin-full-name "$(ADMIN_FULLNAME)"
+
+seed: ## Load the real org structure (6 Faculties, 13 Schools, 113 Programmes; idempotent)
+	cd $(BACKEND) && .venv/bin/python -m unicore.seed \
+		--catalogue "$(CATALOGUE)" \
+		--university-name "$(UNIVERSITY_NAME)" --university-code "$(UNIVERSITY_CODE)"
 
 api: ## Run the FastAPI backend (reload; OTPs/temp passwords print here in dev)
 	cd $(BACKEND) && .venv/bin/uvicorn unicore.main:app --reload --port 8000

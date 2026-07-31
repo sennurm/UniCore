@@ -294,10 +294,11 @@ async def test_real_university_catalogue_imports(make_client) -> None:
     13 Schools — 2 with real Departments, 11 without) imports without errors."""
     from pathlib import Path
 
-    catalogue = (
-        Path(__file__).resolve().parents[2].parent
-        / "requirements" / "sources" / "takshashila_course_catalogue.csv"
-    )
+    from unicore import seed
+
+    catalogue = Path(__file__).resolve().parents[2] / "seeds" / "takshashila_university.csv"
+    # `make seed` must load this very file — guards against the two drifting apart.
+    assert seed.DEFAULT_CATALOGUE == catalogue
     async with make_client("super-admin") as admin:
         await _with_university(admin)
         result = (await _upload(admin, catalogue.read_bytes())).json()

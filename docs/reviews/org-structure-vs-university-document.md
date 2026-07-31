@@ -144,9 +144,13 @@ would import as an empty School.
 
 ## 9. Seed data
 
-The document's structure is checked in as a ready-to-upload catalogue:
-[`requirements/sources/takshashila_course_catalogue.csv`](../../requirements/sources/takshashila_course_catalogue.csv)
-— **113 programmes, 6 Faculty Divisions, 13 Schools** (SCOPE and SCORE carry their
+The document's structure is checked in as the org-structure seed:
+[`backend/seeds/takshashila_university.csv`](../../backend/seeds/takshashila_university.csv),
+loaded by `make seed` (`python -m unicore.seed`) or by uploading it on **Org
+structure → Bulk upload** — both run the same validation pipeline. The seeder
+creates the university root as **“Takshashila University” (code `TU`)** and is
+idempotent: re-running updates changed attributes and touches nothing else.
+The file holds **113 programmes, 6 Faculty Divisions, 13 Schools** (SCOPE and SCORE carry their
 4 real Departments; the other 11 Schools leave the department columns blank and
 receive an auto-created default). `duration_years` holds **academic** years with
 internship counted separately in months, so “4 years incl. 1-year internship”
