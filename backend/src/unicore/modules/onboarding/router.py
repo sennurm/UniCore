@@ -12,8 +12,8 @@ from unicore.core.security import AuthContext
 from unicore.modules.onboarding import service
 from unicore.modules.onboarding.schemas import (
     AllotRequest,
-    BatchOut,
     EnrollmentImportResult,
+    ImportRunOut,
     RowErrorOut,
     SingleStudentAdd,
     TransferRequest,
@@ -23,7 +23,7 @@ from unicore.modules.rbac.service import require_permission
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
 
-@router.post("/imports", response_model=BatchOut, status_code=201)
+@router.post("/imports", response_model=ImportRunOut, status_code=201)
 async def import_csv(
     term_code: str = Form(...),
     file: UploadFile = File(...),
@@ -31,11 +31,11 @@ async def import_csv(
     default_position: int | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:import")),
-) -> BatchOut:
+) -> ImportRunOut:
     """The two `default_*` fields are the upload screen's pickers; they fill blank
     cells only, so a value in the file always wins (ONB-FR-21)."""
     content = await file.read()
-    batch = await service.import_csv(
+    run = await service.import_csv(
         session,
         ctx,
         file.filename or "upload.csv",
@@ -45,59 +45,59 @@ async def import_csv(
             program_code=default_program_code, position=default_position
         ),
     )
-    return BatchOut.model_validate(batch)
+    return ImportRunOut.model_validate(run)
 
 
-@router.get("/imports", response_model=list[BatchOut])
-async def list_batches(
+@router.get("/imports", response_model=list[ImportRunOut])
+async def list_runs(
     limit: int = Query(default=25, le=200),
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
-) -> list[BatchOut]:
-    batches = await service.list_batches(session, ctx, limit)
-    return [BatchOut.model_validate(b) for b in batches]
+) -> list[ImportRunOut]:
+    runs = await service.list_runs(session, ctx, limit)
+    return [ImportRunOut.model_validate(r) for r in runs]
 
 
-@router.get("/imports/{batch_id}/errors", response_model=list[RowErrorOut])
-async def batch_errors(
-    batch_id: uuid.UUID,
+@router.get("/imports/{run_id}/errors", response_model=list[RowErrorOut])
+async def run_errors(
+    run_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> list[RowErrorOut]:
-    errors = await service.batch_errors(session, ctx, batch_id)
+    errors = await service.run_errors(session, ctx, run_id)
     return [RowErrorOut.model_validate(e) for e in errors]
 
 
-@router.get("/imports/{batch_id}/errors.csv", response_class=PlainTextResponse)
+@router.get("/imports/{run_id}/errors.csv", response_class=PlainTextResponse)
 async def error_report(
-    batch_id: uuid.UUID,
+    run_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> PlainTextResponse:
-    errors = await service.batch_errors(session, ctx, batch_id)
+    errors = await service.run_errors(session, ctx, run_id)
     return PlainTextResponse(
         service.error_report_csv(errors),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="errors_{batch_id}.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="errors_{run_id}.csv"'},
     )
 
 
-@router.post("/imports/{batch_id}/confirm", response_model=BatchOut)
-async def confirm_batch(
-    batch_id: uuid.UUID,
+@router.post("/imports/{run_id}/confirm", response_model=ImportRunOut)
+async def confirm_run(
+    run_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:transfer")),
-) -> BatchOut:
-    return BatchOut.model_validate(await service.confirm_batch(session, ctx, batch_id))
+) -> ImportRunOut:
+    return ImportRunOut.model_validate(await service.confirm_run(session, ctx, run_id))
 
 
-@router.post("/imports/{batch_id}/deliver-credentials")
+@router.post("/imports/{run_id}/deliver-credentials")
 async def deliver_credentials(
-    batch_id: uuid.UUID,
+    run_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:import")),
 ) -> dict[str, int]:
-    return await service.deliver_credentials(session, ctx, batch_id)
+    return await service.deliver_credentials(session, ctx, run_id)
 
 
 @router.post("/enrollment-ids", response_model=EnrollmentImportResult)

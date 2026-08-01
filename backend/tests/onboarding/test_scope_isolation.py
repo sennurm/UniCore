@@ -69,7 +69,7 @@ async def test_import_runs_are_not_visible_across_scopes(make_client, campus) ->
             },
         )
         assert upload.status_code == 201, upload.text
-        batch_id = upload.json()["id"]
+        run_id = upload.json()["id"]
         assert len((await admin.get("/onboarding/imports")).json()) == 1
 
     # office-staff granted on one School is scoped, so another actor's run is invisible.
@@ -81,5 +81,5 @@ async def test_import_runs_are_not_visible_across_scopes(make_client, campus) ->
         assert listing.status_code == 200
         assert listing.json() == [], "another actor's import run was listed"
 
-        errors = await scoped.get(f"/onboarding/imports/{batch_id}/errors")
+        errors = await scoped.get(f"/onboarding/imports/{run_id}/errors")
     assert errors.status_code == 404, "error report exposed raw CSV rows across scopes"

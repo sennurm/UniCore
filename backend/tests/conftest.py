@@ -125,7 +125,7 @@ async def db(database: None) -> AsyncIterator[None]:
             text(
                 "TRUNCATE org_units, users, audit_events, grants, otp_challenges, "
                 "devices, device_change_requests, consent_records, grievances, "
-                "domain_events, academic_terms, import_batches, import_row_errors, "
+                "domain_events, academic_terms, import_runs, import_row_errors, "
                 "student_profiles, section_memberships, batches CASCADE"
             )
         )

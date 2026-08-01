@@ -132,7 +132,7 @@ register(
 )
 
 
-class BatchOut(BaseModel):
+class ImportRunOut(BaseModel):
     id: uuid.UUID
     filename: str
     term_code: str

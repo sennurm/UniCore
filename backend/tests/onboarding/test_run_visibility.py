@@ -50,7 +50,7 @@ async def test_parked_run_can_be_released_and_then_delivers(make_client, campus)
 
         blocked = await admin.post(f"/onboarding/imports/{run['id']}/deliver-credentials")
         assert blocked.status_code == 409
-        assert "confirm it before delivery" in blocked.json()["detail"]
+        assert "release it before delivery" in blocked.json()["detail"]
 
         released = await admin.post(f"/onboarding/imports/{run['id']}/confirm")
         assert released.status_code == 200

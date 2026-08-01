@@ -9,32 +9,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.modules.onboarding.models import (
     Batch,
-    ImportBatch,
     ImportRowError,
+    ImportRun,
     SectionMembership,
     StudentProfile,
 )
 
 
-async def get_batch(session: AsyncSession, batch_id: uuid.UUID) -> ImportBatch | None:
-    return await session.get(ImportBatch, batch_id)
+async def get_run(session: AsyncSession, run_id: uuid.UUID) -> ImportRun | None:
+    return await session.get(ImportRun, run_id)
 
 
-async def list_batches(
+async def list_runs(
     session: AsyncSession, limit: int, uploaded_by: str | None = None
-) -> Sequence[ImportBatch]:
+) -> Sequence[ImportRun]:
     """`uploaded_by` filters in the query — a scoped caller's rows never leave the DB."""
-    query = select(ImportBatch).order_by(ImportBatch.created_at.desc()).limit(limit)
+    query = select(ImportRun).order_by(ImportRun.created_at.desc()).limit(limit)
     if uploaded_by is not None:
-        query = query.where(ImportBatch.uploaded_by == uploaded_by)
+        query = query.where(ImportRun.uploaded_by == uploaded_by)
     result = await session.execute(query)
     return result.scalars().all()
 
 
-async def batch_errors(session: AsyncSession, batch_id: uuid.UUID) -> Sequence[ImportRowError]:
+async def run_errors(session: AsyncSession, run_id: uuid.UUID) -> Sequence[ImportRowError]:
     result = await session.execute(
         select(ImportRowError)
-        .where(ImportRowError.batch_id == batch_id)
+        .where(ImportRowError.run_id == run_id)
         .order_by(ImportRowError.row_number)
     )
     return result.scalars().all()

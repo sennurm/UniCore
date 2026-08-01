@@ -26,8 +26,8 @@ from unicore.modules.onboarding import dao
 from unicore.modules.onboarding.models import (
     RISKY_CHANGE_THRESHOLD,
     Batch,
-    ImportBatch,
     ImportRowError,
+    ImportRun,
     SectionMembership,
     StudentProfile,
 )
@@ -100,7 +100,7 @@ async def import_csv(
     content: bytes,
     term_code: str,
     defaults: ImportDefaults | None = None,
-) -> ImportBatch:
+) -> ImportRun:
     """Pre-parse gate → row validation → partial commit → run summary."""
     _pre_parse_gate(content)
     try:
@@ -118,13 +118,13 @@ async def import_csv(
             detail=f"Header does not match schema v1 — missing: {', '.join(sorted(missing))}.",
         )
 
-    batch = ImportBatch(
+    run = ImportRun(
         filename=filename,
         file_hash=hashlib.sha256(content).hexdigest(),
         term_code=term_code,
         uploaded_by=ctx.user_id,
     )
-    session.add(batch)
+    session.add(run)
     await session.flush()
 
     scope_paths = await rbac_service.scope_paths_for(ctx, IMPORT_ROLES)
@@ -133,7 +133,7 @@ async def import_csv(
     created = updated = unchanged = rejected = 0
     risky_changes = 0
 
-    with timed("import batch processed", **{"db.system.name": "postgresql"}):
+    with timed("import run processed", **{"db.system.name": "postgresql"}):
         for index, raw in enumerate(reader, start=2):  # row 1 is the header
             row = {k: (v or "").strip() for k, v in raw.items() if k}
             try:
@@ -151,7 +151,7 @@ async def import_csv(
                 rejected += 1
                 session.add(
                     ImportRowError(
-                        batch_id=batch.id,
+                        run_id=run.id,
                         row_number=index,
                         field=err.field,
                         reason=err.reason,
@@ -167,42 +167,42 @@ async def import_csv(
             else:
                 unchanged += 1
 
-    batch.created_batches = sorted(new_batches)
-    batch.rows_total = created + updated + unchanged + rejected
-    batch.rows_created, batch.rows_updated = created, updated
-    batch.rows_unchanged, batch.rows_rejected = unchanged, rejected
+    run.created_batches = sorted(new_batches)
+    run.rows_total = created + updated + unchanged + rejected
+    run.rows_created, run.rows_updated = created, updated
+    run.rows_unchanged, run.rows_rejected = unchanged, rejected
 
     committed_rows = created + updated + unchanged
     if committed_rows and risky_changes / committed_rows > RISKY_CHANGE_THRESHOLD:
         # ONB §8: a feed rewriting org mapping/DOB wholesale pauses for confirmation.
-        batch.status = "needs-review"
+        run.status = "needs-review"
         get_logger().warning(
-            "import batch parked for review",
+            "import run parked for review",
             risky_changes=risky_changes,
             committed_rows=committed_rows,
         )
     else:
-        batch.status = "committed"
+        run.status = "committed"
 
     await audit_service.record(
         session,
         actor=ctx.user_id,
         action="onb.import.completed",
-        object_type="import_batch",
-        object_id=str(batch.id),
+        object_type="import_run",
+        object_id=str(run.id),
         after={
             "filename": filename,
-            "file_hash": batch.file_hash,
+            "file_hash": run.file_hash,
             "created": created,
             "updated": updated,
             "unchanged": unchanged,
             "rejected": rejected,
-            "status": batch.status,
+            "status": run.status,
             "batches_created": sorted(new_batches),
         },
     )
     await session.commit()
-    return batch
+    return run
 
 
 def _pre_parse_gate(content: bytes) -> None:
@@ -598,15 +598,15 @@ async def withdraw_student(
 
 
 async def deliver_credentials(
-    session: AsyncSession, ctx: AuthContext, batch_id: uuid.UUID
+    session: AsyncSession, ctx: AuthContext, run_id: uuid.UUID
 ) -> dict[str, int]:
     """Activation pipeline: credential generation → delivery → ACTIVE (ONB-FR-06)."""
-    batch = await dao.get_batch(session, batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found.")
-    if batch.status == "needs-review":
+    run = await dao.get_run(session, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Import run not found.")
+    if run.status == "needs-review":
         raise HTTPException(
-            status_code=409, detail="Batch is held for review — confirm it before delivery."
+            status_code=409, detail="Import run is held for review — release it before delivery."
         )
     pending = await dao.list_pending_delivery(session)
     delivered = failed = 0
@@ -774,59 +774,59 @@ async def validate_position(
 
 
 async def _own_uploads_only(ctx: AuthContext) -> str | None:
-    """The uploader whose batches the caller may see, or None for university-wide.
+    """The uploader whose runs the caller may see, or None for university-wide.
 
-    ONB §4: nobody outside their scope sees another scope's import batches. An
-    ImportBatch carries no org unit of its own — a file may span Programmes — so a
-    scoped caller is limited to the batches they uploaded themselves, which is the
+    ONB §4: nobody outside their scope sees another scope's import runs. An
+    ImportRun carries no org unit of its own — a file may span Programmes — so a
+    scoped caller is limited to the runs they uploaded themselves, which is the
     strictest reading and never over-shares. University-wide roles see everything.
     """
     scope_paths = await rbac_service.scope_paths_for(ctx, IMPORT_ROLES)
     return None if scope_paths is None else ctx.user_id
 
 
-async def list_batches(session: AsyncSession, ctx: AuthContext, limit: int) -> list[ImportBatch]:
-    return list(await dao.list_batches(session, limit, await _own_uploads_only(ctx)))
+async def list_runs(session: AsyncSession, ctx: AuthContext, limit: int) -> list[ImportRun]:
+    return list(await dao.list_runs(session, limit, await _own_uploads_only(ctx)))
 
 
-async def batch_errors(
-    session: AsyncSession, ctx: AuthContext, batch_id: uuid.UUID
+async def run_errors(
+    session: AsyncSession, ctx: AuthContext, run_id: uuid.UUID
 ) -> list[ImportRowError]:
     """Error rows quote the raw CSV line, so they carry the same PII as the import
-    itself and are gated by the same rule as the batch that produced them."""
-    await _require_batch_visible(session, ctx, batch_id)
-    return list(await dao.batch_errors(session, batch_id))
+    itself and are gated by the same rule as the run that produced them."""
+    await _require_run_visible(session, ctx, run_id)
+    return list(await dao.run_errors(session, run_id))
 
 
-async def _require_batch_visible(
-    session: AsyncSession, ctx: AuthContext, batch_id: uuid.UUID
-) -> ImportBatch:
-    batch = await dao.get_batch(session, batch_id)
+async def _require_run_visible(
+    session: AsyncSession, ctx: AuthContext, run_id: uuid.UUID
+) -> ImportRun:
+    run = await dao.get_run(session, run_id)
     uploader = await _own_uploads_only(ctx)
-    # 404, not 403: a scoped caller learns nothing about batches outside their scope.
-    if batch is None or (uploader is not None and batch.uploaded_by != uploader):
+    # 404, not 403: a scoped caller learns nothing about runs outside their scope.
+    if run is None or (uploader is not None and run.uploaded_by != uploader):
         raise HTTPException(status_code=404, detail="Import run not found.")
-    return batch
+    return run
 
 
-async def confirm_batch(
-    session: AsyncSession, ctx: AuthContext, batch_id: uuid.UUID
-) -> ImportBatch:
-    """System Admin confirmation for a batch parked by the risky-change guardrail."""
-    batch = await dao.get_batch(session, batch_id)
-    if batch is None or batch.status != "needs-review":
-        raise HTTPException(status_code=404, detail="No batch awaiting review.")
-    batch.status = "committed"
+async def confirm_run(
+    session: AsyncSession, ctx: AuthContext, run_id: uuid.UUID
+) -> ImportRun:
+    """System Admin release of a run parked by the risky-change guardrail."""
+    run = await dao.get_run(session, run_id)
+    if run is None or run.status != "needs-review":
+        raise HTTPException(status_code=404, detail="No import run awaiting review.")
+    run.status = "committed"
     await audit_service.record(
         session,
         actor=ctx.user_id,
         action="onb.import.confirmed",
-        object_type="import_batch",
-        object_id=str(batch.id),
+        object_type="import_run",
+        object_id=str(run.id),
         after={"status": "committed"},
     )
     await session.commit()
-    return batch
+    return run
 
 
 def error_report_csv(errors: list[ImportRowError]) -> str:
@@ -841,12 +841,12 @@ def error_report_csv(errors: list[ImportRowError]) -> str:
 __all__ = [
     "add_single_student",
     "allot_section",
-    "batch_errors",
-    "confirm_batch",
+    "run_errors",
+    "confirm_run",
     "deliver_credentials",
     "error_report_csv",
     "import_csv",
-    "list_batches",
+    "list_runs",
     "membership_as_of",
     "section_roster",
     "transfer_student",

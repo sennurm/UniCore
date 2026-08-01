@@ -21,16 +21,16 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from unicore.core.db import Base
 
-BATCH_STATUSES = ("processing", "committed", "needs-review", "rejected")
+RUN_STATUSES = ("processing", "committed", "needs-review", "rejected")
 DELIVERY_STATUSES = ("pending", "delivered", "failed")
 
-# ONB §8 guardrail: a batch changing org mapping / DOB for more than this share of
+# ONB §8 guardrail: a run changing org mapping / DOB for more than this share of
 # its rows pauses for System Admin confirmation instead of committing silently.
 RISKY_CHANGE_THRESHOLD = 0.20
 
 
-class ImportBatch(Base):
-    __tablename__ = "import_batches"
+class ImportRun(Base):
+    __tablename__ = "import_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -38,7 +38,7 @@ class ImportBatch(Base):
     term_code: Mapped[str] = mapped_column(String(50), nullable=False)
     schema_version: Mapped[str] = mapped_column(String(10), nullable=False, default="v1")
     status: Mapped[str] = mapped_column(
-        Enum(*BATCH_STATUSES, name="import_batch_status", create_type=False),
+        Enum(*RUN_STATUSES, name="import_run_status", create_type=False),
         nullable=False,
         default="processing",
     )
@@ -62,10 +62,10 @@ class ImportRowError(Base):
     """Powers the downloadable error report (ONB-FR-03): row number, field, reason, raw row."""
 
     __tablename__ = "import_row_errors"
-    __table_args__ = (Index("ix_import_row_errors_batch", "batch_id"),)
+    __table_args__ = (Index("ix_import_row_errors_run", "run_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    batch_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("import_batches.id"), nullable=False)
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("import_runs.id"), nullable=False)
     row_number: Mapped[int] = mapped_column(Integer, nullable=False)
     field: Mapped[str] = mapped_column(String(60), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
