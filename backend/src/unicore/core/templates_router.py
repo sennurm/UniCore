@@ -1,16 +1,24 @@
-"""Template listing + download. Authenticated (project security rule) but not
-role-restricted: templates are blank schemas, never data."""
+"""Template listing + download.
 
-from fastapi import APIRouter, HTTPException
+Templates are blank schemas, never data, so these once shipped authenticated but
+without a role check. The project rule admits no exception — deny by default,
+role check on every endpoint — so they now gate on `templates:read` via the
+registered checker, which keeps core/ free of any import from modules/.
+"""
+
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import PlainTextResponse
 
 from unicore.core import templates
+from unicore.core.security import AuthContext, requires
 
 router = APIRouter(prefix="/templates", tags=["templates"])
 
 
 @router.get("")
-async def list_templates() -> list[dict[str, object]]:
+async def list_templates(
+    ctx: AuthContext = Depends(requires("templates:read")),
+) -> list[dict[str, object]]:
     return [
         {
             "key": t.key,
@@ -24,7 +32,9 @@ async def list_templates() -> list[dict[str, object]]:
 
 
 @router.get("/{key}.csv", response_class=PlainTextResponse)
-async def download_template(key: str) -> PlainTextResponse:
+async def download_template(
+    key: str, ctx: AuthContext = Depends(requires("templates:read"))
+) -> PlainTextResponse:
     template = templates.get(key)
     if template is None:
         raise HTTPException(status_code=404, detail=f"No template '{key}'.")

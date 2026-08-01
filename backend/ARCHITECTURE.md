@@ -73,17 +73,27 @@ scope.** Concretely:
    allowlist (`/health`; docs endpoints in dev only). The gate fails closed
    when no token verifier is registered.
 2. **Role check on every endpoint:** each non-public path operation declares
-   `rbac.service.require_permission("<action>")` as a dependency. Endpoints
-   without it don't pass review; the permission engine evaluates role AND
-   org-unit scope (AUTH-FR-04/05).
+   `rbac.service.require_permission("<action>")` as a dependency. Routers under
+   `core/` cannot import `modules/` (rule 3 above), so they declare
+   `core.security.requires("<action>")`, which delegates to the checker rbac
+   registers at startup — the same engine, evaluating role AND org-unit scope
+   (AUTH-FR-04/05), with core's independence intact.
 3. **No cross-user data leakage:** DAOs take the caller's scope as an explicit
    parameter and filter in the query — never fetch-then-filter in Python;
    response schemas expose only fields the endpoint's audience may see; "own
    data" endpoints (`/me/...`) resolve the subject from the AuthContext, never
-   from a client-supplied id.
-4. **Tests prove it:** `tests/test_security.py` walks every registered route
-   and fails if one responds without a token; every module must ship
-   access-denial and scope-filtering test cases (the TC-*-Access rows).
+   from a client-supplied id. An endpoint that *does* take an id (a Section, a
+   batch) must authorise that id against the caller's scope before reading —
+   holding the action permission is not authority over every object.
+4. **Tests prove it:** `tests/test_security.py` sweeps every path/method pair in
+   the OpenAPI schema — parameterised paths and non-GET verbs included — and
+   fails if one responds without a token. Enumerate from `app.openapi()`, not
+   `app.routes`: FastAPI keeps included routers as opaque `_IncludedRouter`
+   entries, so walking `app.routes` sees only the docs endpoints and guards
+   nothing. A second test parses each router's AST and fails on any endpoint
+   that declares no permission, against a short allowlist of public and
+   own-data operations. Every module must also ship access-denial and
+   scope-filtering test cases (the TC-*-Access rows).
 
 ## Other conventions
 

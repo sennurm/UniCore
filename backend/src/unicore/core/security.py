@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 import structlog
-from fastapi import Request, Response
+from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from unicore.core.config import get_settings
@@ -49,14 +49,39 @@ class InvalidTokenError(Exception):
 
 
 TokenVerifier = Callable[[str], Awaitable[AuthContext]]
+PermissionChecker = Callable[[Request, str], Awaitable[AuthContext]]
 
 _token_verifier: TokenVerifier | None = None
+_permission_checker: PermissionChecker | None = None
 
 
 def register_token_verifier(verifier: TokenVerifier) -> None:
     """Called by the auth module at startup; core stays free of module imports."""
     global _token_verifier
     _token_verifier = verifier
+
+
+def register_permission_checker(checker: PermissionChecker) -> None:
+    """Called by the rbac module at startup, mirroring the token verifier.
+
+    Routers under core/ (templates, health) cannot import modules/ — the
+    architecture rule is one-way — but the project rule still demands a role check
+    on every endpoint. Registration inverts the dependency so core keeps its
+    independence and still refuses to serve an unauthorised caller.
+    """
+    global _permission_checker
+    _permission_checker = checker
+
+
+def requires(action: str):  # noqa: ANN201 — returns a FastAPI dependency
+    """core/ equivalent of rbac's `require_permission`, resolved at request time."""
+
+    async def dependency(request: Request) -> AuthContext:
+        if _permission_checker is None:  # nothing registered — fail closed
+            raise HTTPException(status_code=403, detail="Authorization is unavailable.")
+        return await _permission_checker(request, action)
+
+    return dependency
 
 
 def public_paths() -> frozenset[str]:

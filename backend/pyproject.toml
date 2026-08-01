@@ -54,6 +54,7 @@ extend-immutable-calls = [
     "fastapi.Form",
     "fastapi.Query",
     "unicore.modules.rbac.service.require_permission",
+    "unicore.core.security.requires",
 ]
 
 [tool.mypy]

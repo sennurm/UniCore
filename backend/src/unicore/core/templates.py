@@ -34,6 +34,19 @@ class CsvTemplate:
         return buffer.getvalue()
 
 
+def strip_comments(text: str) -> str:
+    """Remove the `#` note lines `render()` writes, so a downloaded template can be
+    filled in and uploaded back unchanged.
+
+    Every importer must call this before parsing. It lives beside `render()` on
+    purpose: the code that writes the comments and the code that removes them
+    should not be able to drift apart.
+    """
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
 _REGISTRY: dict[str, CsvTemplate] = {}
 
 
