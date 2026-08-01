@@ -35,7 +35,9 @@ async def _tree(client: httpx.AsyncClient) -> dict[str, dict]:
     """University -> FET -> School -> two departments, each with a program + section."""
     uni = await _unit(client, type="university", name="U", code="UNI")
     fd = await _unit(client, type="faculty_division", name="FET", code="FET", parent_id=uni["id"])
-    school = await _unit(client, type="school", name="SOCE", code="SOCE", parent_id=fd["id"])
+    school = await _unit(
+        client, cadence="semester", type="school", name="SOCE", code="SOCE", parent_id=fd["id"]
+    )
     dept = {"type": "department", "parent_id": school["id"]}
     dept_a = await _unit(client, name="CSE", code="CSE", **dept)
     dept_b = await _unit(client, name="AIDS", code="AIDS", **dept)
@@ -54,8 +56,14 @@ async def _tree(client: httpx.AsyncClient) -> dict[str, dict]:
         )
         sections = {"sec_a": {"id": str(sec_a.id)}, "sec_b": {"id": str(sec_b.id)}}
     return {
-        "uni": uni, "fd": fd, "school": school,
-        "dept_a": dept_a, "dept_b": dept_b, "prog_a": prog_a, "prog_b": prog_b, **sections,
+        "uni": uni,
+        "fd": fd,
+        "school": school,
+        "dept_a": dept_a,
+        "dept_b": dept_b,
+        "prog_a": prog_a,
+        "prog_b": prog_b,
+        **sections,
     }
 
 

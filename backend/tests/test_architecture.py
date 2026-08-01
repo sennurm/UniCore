@@ -78,8 +78,7 @@ def test_layering_within_module_is_one_way() -> None:
                 continue
             layer_path = imp.removeprefix(own_prefix)
             assert not any(
-                layer_path == suffix or layer_path.startswith(suffix + ".")
-                for suffix in forbidden
+                layer_path == suffix or layer_path.startswith(suffix + ".") for suffix in forbidden
             ), f"{f} imports {imp} — violates router→service→dao→models layering"
 
 

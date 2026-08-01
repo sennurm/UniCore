@@ -15,6 +15,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from unicore.core.db import Base
 
 TERM_STATUSES = ("draft", "approved", "superseded")
+TERM_PARITIES = ("odd", "even")
 
 
 class AcademicTerm(Base):
@@ -39,6 +40,12 @@ class AcademicTerm(Base):
     )
     # Backstop for AUTH-FR-13 term-bound grant revocation.
     archival_backstop_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Which half of a semester ladder is live this term (TTM-FR-18). Section
+    # generation refuses to run without it rather than guessing — the wrong
+    # parity creates the wrong half of every Programme in the School.
+    parity: Mapped[str | None] = mapped_column(
+        Enum(*TERM_PARITIES, name="term_parity", create_type=False), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         Enum(*TERM_STATUSES, name="academic_term_status", create_type=False),
         nullable=False,

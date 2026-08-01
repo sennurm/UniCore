@@ -25,9 +25,7 @@ async def test_unprivileged_role_cannot_provision(make_client) -> None:
 async def test_duplicate_active_erp_id_conflicts(make_client) -> None:
     async with make_client("system-admin") as client:
         assert (await client.post("/user", json=STUDENT)).status_code == 201
-        duplicate = await client.post(
-            "/user", json={**STUDENT, "username": "someone.else"}
-        )
+        duplicate = await client.post("/user", json={**STUDENT, "username": "someone.else"})
     assert duplicate.status_code == 409
 
 

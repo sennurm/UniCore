@@ -16,7 +16,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from unicore.core.db import Base
@@ -48,6 +48,11 @@ class ImportBatch(Base):
     rows_unchanged: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     rows_rejected: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     uploaded_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Admission cohorts this run brought into existence (ONB §8). A typo'd
+    # admission_year creates a real Batch, so the run must name what it created.
+    created_batches: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -67,21 +72,53 @@ class ImportRowError(Base):
     raw_row: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class Batch(Base):
+    """The admission cohort — (Programme x joining year), e.g. BT-CSE-2026.
+
+    "Batch" is reserved for this meaning alone (00-overview.md §3). Auto-created
+    on first import (ONB-FR-19); the code comes from a configurable university
+    template, so it is stored rather than derived — changing the template must
+    never rename cohorts already issued.
+    """
+
+    __tablename__ = "batches"
+    __table_args__ = (
+        UniqueConstraint("program_id", "joining_year", name="uq_batches_program_year"),
+        UniqueConstraint("code", name="uq_batches_code"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    program_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
+    joining_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    code: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class StudentProfile(Base):
     """Student-specific fields hanging off `users` (which owns identity + credentials)."""
 
     __tablename__ = "student_profiles"
     __table_args__ = (
-        # ONB-FR-08: roll numbers unique within Program + admission year.
+        # ONB-FR-08: roll numbers unique within a Batch — the (Program, joining
+        # year) pairing this constraint already used before the batch was named.
         UniqueConstraint(
             "program_id", "admission_year", "roll_number", name="uq_student_roll_program_year"
         ),
+        Index("ix_student_profiles_batch", "batch_id"),
+        Index("ix_student_profiles_program_position", "program_id", "position"),
     )
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
     program_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
     roll_number: Mapped[str] = mapped_column(String(50), nullable=False)
     admission_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("batches.id"), nullable=True)
+    # Where the student sits in the ladder: semester n for semester cadence, year
+    # n for yearly. One number is authoritative; the other is derived on read so
+    # they can never contradict each other (ONB-FR-20).
+    position: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     gender: Mapped[str | None] = mapped_column(String(20), nullable=True)
     credential_delivery: Mapped[str] = mapped_column(

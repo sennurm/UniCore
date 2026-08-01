@@ -6,6 +6,7 @@ CATALOGUE = {
     "faculty_division_code": "FET",
     "faculty_division_name": "Faculty of Engineering & Technology",
     "school_code": "SOCE",
+    "cadence": "semester",
     "school_name": "School of Computational Engineering",
     "department_code": "CSE",
     "department_name": "Computer Science & Engineering",
@@ -53,10 +54,20 @@ async def test_flat_row_creates_the_whole_branch(make_client) -> None:
 
 async def test_shared_ancestors_created_once(make_client) -> None:
     """Repeating the ancestor columns per row reuses them instead of duplicating."""
-    second = {**CATALOGUE, "programme_code": "MT-CSE", "programme_name": "M.Tech CSE",
-              "level": "Post Graduate", "duration_years": "2"}
-    third = {**CATALOGUE, "department_code": "AIDS", "department_name": "AI & Data Science",
-             "programme_code": "BT-AIDS", "programme_name": "B.Tech AI & DS"}
+    second = {
+        **CATALOGUE,
+        "programme_code": "MT-CSE",
+        "programme_name": "M.Tech CSE",
+        "level": "Post Graduate",
+        "duration_years": "2",
+    }
+    third = {
+        **CATALOGUE,
+        "department_code": "AIDS",
+        "department_name": "AI & Data Science",
+        "programme_code": "BT-AIDS",
+        "programme_name": "B.Tech AI & DS",
+    }
     async with make_client("super-admin") as admin:
         await _with_university(admin)
         result = (await _upload(admin, _csv([CATALOGUE, second, third]))).json()
@@ -74,9 +85,9 @@ async def test_reimport_is_idempotent_and_updates_names(make_client) -> None:
         await _with_university(admin)
         first = (await _upload(admin, _csv([CATALOGUE]))).json()
         again = (await _upload(admin, _csv([CATALOGUE]))).json()
-        renamed = (await _upload(
-            admin, _csv([{**CATALOGUE, "programme_name": "B.Tech CSE (Revised)"}])
-        )).json()
+        renamed = (
+            await _upload(admin, _csv([{**CATALOGUE, "programme_name": "B.Tech CSE (Revised)"}]))
+        ).json()
     assert first["rows_created"] == 4
     assert again["rows_created"] == 0 and again["rows_unchanged"] == 4
     assert renamed["rows_updated"] == 1  # only the Programme name changed
@@ -85,10 +96,10 @@ async def test_reimport_is_idempotent_and_updates_names(make_client) -> None:
 async def test_row_validation(make_client) -> None:
     rows = [
         {**CATALOGUE, "programme_code": "", "programme_name": "No code"},
-        {**CATALOGUE, "programme_code": "X1", "level": "Undergrad"},        # bad level
-        {**CATALOGUE, "programme_code": "X2", "mode": "Weekends"},          # bad mode
-        {**CATALOGUE, "programme_code": "X3", "duration_years": "many"},    # bad duration
-        CATALOGUE,                                                          # valid
+        {**CATALOGUE, "programme_code": "X1", "level": "Undergrad"},  # bad level
+        {**CATALOGUE, "programme_code": "X2", "mode": "Weekends"},  # bad mode
+        {**CATALOGUE, "programme_code": "X3", "duration_years": "many"},  # bad duration
+        CATALOGUE,  # valid
     ]
     async with make_client("super-admin") as admin:
         await _with_university(admin)
@@ -204,6 +215,7 @@ SCHOOL_ONLY = {
     "faculty_division_code": "FHS",
     "faculty_division_name": "Faculty of Health Sciences",
     "school_code": "SAHS",
+    "cadence": "semester",
     "school_name": "School of Allied Health Sciences",
     "department_code": "",
     "department_name": "",
@@ -251,9 +263,11 @@ async def test_partial_department_columns_rejected(make_client) -> None:
     """A code without a name (or vice versa) is a mistake, not a default request."""
     async with make_client("super-admin") as admin:
         await _with_university(admin)
-        result = (await _upload(
-            admin, _csv([{**SCHOOL_ONLY, "department_code": "AHS", "department_name": ""}])
-        )).json()
+        result = (
+            await _upload(
+                admin, _csv([{**SCHOOL_ONLY, "department_code": "AHS", "department_name": ""}])
+            )
+        ).json()
     assert result["rows_rejected"] == 1
     assert result["errors"][0]["field"] == "department_name"
 
@@ -266,9 +280,17 @@ async def test_programme_category_partner_and_internship(make_client) -> None:
         "category": "Industry Collaborated",
         "industry_partner": "IBM",
     }
-    lateral = {**SCHOOL_ONLY, "school_code": "SOP", "school_name": "School of Pharmacy",
-               "programme_code": "B-PHARM", "programme_name": "B.Pharm",
-               "internship_months": "", "lateral_entry_semester": "3", "duration_years": "4"}
+    lateral = {
+        **SCHOOL_ONLY,
+        "school_code": "SOP",
+        "cadence": "semester",
+        "school_name": "School of Pharmacy",
+        "programme_code": "B-PHARM",
+        "programme_name": "B.Pharm",
+        "internship_months": "",
+        "lateral_entry_semester": "3",
+        "duration_years": "4",
+    }
     async with make_client("super-admin") as admin:
         await _with_university(admin)
         result = (await _upload(admin, _csv([industry, lateral]))).json()
@@ -282,9 +304,7 @@ async def test_programme_category_partner_and_internship(make_client) -> None:
 async def test_invalid_category_rejected(make_client) -> None:
     async with make_client("super-admin") as admin:
         await _with_university(admin)
-        result = (await _upload(
-            admin, _csv([{**CATALOGUE, "category": "Sponsored"}])
-        )).json()
+        result = (await _upload(admin, _csv([{**CATALOGUE, "category": "Sponsored"}]))).json()
     assert result["rows_rejected"] == 1
     assert result["errors"][0]["field"] == "category"
 

@@ -3,10 +3,10 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import func, select, text
+from sqlalchemy import cast, func, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from unicore.modules.org.models import OrgUnit
+from unicore.modules.org.models import Ltree, OrgUnit, UniversitySetting
 
 
 async def get_by_id(session: AsyncSession, unit_id: uuid.UUID) -> OrgUnit | None:
@@ -85,6 +85,31 @@ async def find_section(
     return result.scalar_one_or_none()
 
 
+async def descendants_of_type(
+    session: AsyncSession,
+    ancestor_path: str,
+    unit_type: str,
+    include_inactive: bool = False,
+) -> Sequence[OrgUnit]:
+    """Units of one type anywhere beneath an ancestor, via the ltree GiST index.
+
+    Scoping happens in the query — a caller asking for one School's Programmes
+    never sees another School's rows.
+    """
+    query = (
+        select(OrgUnit)
+        .where(
+            OrgUnit.type == unit_type,
+            OrgUnit.path.op("<@")(cast(literal(ancestor_path), Ltree())),
+        )
+        .order_by(OrgUnit.path)
+    )
+    if not include_inactive:
+        query = query.where(OrgUnit.status == "active")
+    result = await session.execute(query)
+    return result.scalars().all()
+
+
 async def list_units(
     session: AsyncSession,
     unit_type: str | None,
@@ -104,6 +129,21 @@ async def list_units(
         )
     result = await session.execute(query)
     return result.scalars().all()
+
+
+async def get_setting(session: AsyncSession, key: str) -> str | None:
+    row = await session.get(UniversitySetting, key)
+    return row.value if row else None
+
+
+async def set_setting(session: AsyncSession, key: str, value: str, actor: str) -> None:
+    row = await session.get(UniversitySetting, key)
+    if row is None:
+        session.add(UniversitySetting(key=key, value=value, updated_by=actor))
+    else:
+        row.value = value
+        row.updated_by = actor
+    await session.flush()
 
 
 async def get_by_path(session: AsyncSession, path: str) -> OrgUnit | None:

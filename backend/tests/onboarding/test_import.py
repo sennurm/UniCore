@@ -32,11 +32,11 @@ async def test_partial_commit_with_error_report(make_client, campus) -> None:
     """TC-ONB-002/006: good rows commit; bad rows land in a downloadable report."""
     rows = [
         student_row(1),
-        student_row(2, sif_id=""),                       # missing mandatory field
-        student_row(3, mobile="", email=""),             # no contact channel
-        student_row(4, program_code="NOPE"),             # unknown program
-        student_row(5, section_label="9Z"),              # section not created
-        student_row(6, admission_year="not-a-year"),     # bad year
+        student_row(2, sif_id=""),  # missing mandatory field
+        student_row(3, mobile="", email=""),  # no contact channel
+        student_row(4, program_code="NOPE"),  # unknown program
+        student_row(5, section_label="9Z"),  # section not created
+        student_row(6, admission_year="not-a-year"),  # bad year
         student_row(7),
     ]
     async with make_client("system-admin") as staff:
@@ -46,8 +46,15 @@ async def test_partial_commit_with_error_report(make_client, campus) -> None:
 
         errors = (await staff.get(f"/onboarding/imports/{batch['id']}/errors")).json()
         fields = {e["field"] for e in errors}
-        assert fields == {"sif_id", "mobile/email", "program_code", "section_label",
-                          "admission_year"}
+        assert fields == {
+            # A row with neither identifier is rejected on the pair, not on SIF
+            # alone — either one is now sufficient (business rule 1).
+            "sif_id/enrollment_id",
+            "mobile/email",
+            "program_code",
+            "section_label",
+            "admission_year",
+        }
 
         report = await staff.get(f"/onboarding/imports/{batch['id']}/errors.csv")
         assert report.status_code == 200

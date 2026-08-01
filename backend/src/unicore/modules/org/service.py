@@ -10,15 +10,22 @@ import csv
 import io
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
+from typing import cast
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.core.security import AuthContext
+from unicore.core.templates import strip_comments
 from unicore.modules.audit import service as audit_service
 from unicore.modules.org import dao
-from unicore.modules.org.models import PARENT_TYPE_OF, OrgUnit
+from unicore.modules.org.models import (
+    CADENCES,
+    PARENT_TYPE_OF,
+    POSITIONS_PER_YEAR,
+    OrgUnit,
+)
 from unicore.modules.org.schemas import (
     ORG_CSV_COLUMNS,
     PROGRAMME_CATEGORIES,
@@ -93,6 +100,8 @@ async def create_unit(session: AsyncSession, ctx: AuthContext, data: OrgUnitCrea
         parent_id=data.parent_id,
         path=path,
         campus_code=data.campus_code,
+        cadence=data.cadence,
+        class_size_cap=data.class_size_cap,
     )
     session.add(unit)
     await session.flush()
@@ -233,6 +242,155 @@ async def list_children(session: AsyncSession, parent_id: uuid.UUID) -> Sequence
     return await dao.list_children(session, parent_id)
 
 
+async def list_descendants_of_type(
+    session: AsyncSession, ancestor_id: uuid.UUID, unit_type: str
+) -> Sequence[OrgUnit]:
+    """Active units of a type beneath one unit — TTM asks this for the Programmes
+    and Sections of a School during term setup."""
+    ancestor = await _get_or_404(session, ancestor_id)
+    return await dao.descendants_of_type(session, ancestor.path, unit_type)
+
+
+# --- cadence, ladder and class size (AUTH-FR-19, TTM-FR-22/24) ---------------
+
+
+async def effective_cadence(session: AsyncSession, programme: OrgUnit) -> str:
+    """A Programme's own cadence if it overrides, else its School's.
+
+    The School is authoritative and the Programme is the exception — a School of
+    Pharmacy runs B.Pharm on semesters alongside PhD programmes that do not.
+    """
+    if programme.cadence is not None:
+        return programme.cadence
+    school_id = await dao.ancestor_of_type(session, programme.id, "school")
+    school = await dao.get_by_id(session, school_id) if school_id else None
+    if school is None or school.cadence is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No curriculum cadence set for '{programme.name}' or its School.",
+        )
+    return school.cadence
+
+
+def position_ladder(cadence: str, duration_years: int | None) -> list[int]:
+    """Every position a Programme has: 1..(years x positions-per-year).
+
+    An unknown duration yields an empty ladder rather than a guess — inventing
+    four years would create Sections for terms the Programme does not have.
+    """
+    if not duration_years:
+        return []
+    return list(range(1, duration_years * POSITIONS_PER_YEAR[cadence] + 1))
+
+
+def live_positions(cadence: str, duration_years: int | None, parity: str) -> list[int]:
+    """The positions a Programme actually runs in a term of this parity.
+
+    Semester programmes run half their ladder per term — odd positions in an odd
+    term, even in an even one. Yearly programmes run every position every term,
+    so parity does not apply to them.
+    """
+    ladder = position_ladder(cadence, duration_years)
+    if cadence == "yearly":
+        return ladder
+    wanted = 1 if parity == "odd" else 0
+    return [p for p in ladder if p % 2 == wanted]
+
+
+def year_of(cadence: str, position: int) -> int:
+    """The academic year a position falls in — derived, never stored (ONB-FR-20)."""
+    per_year = POSITIONS_PER_YEAR[cadence]
+    return (position - 1) // per_year + 1
+
+
+async def class_size_cap(session: AsyncSession, school: OrgUnit) -> int:
+    """The School's override if set, else the university default."""
+    if school.class_size_cap is not None:
+        return school.class_size_cap
+    return int(await get_setting(session, "class_size_cap"))
+
+
+async def _assert_cadence_change_safe(
+    session: AsyncSession, unit: OrgUnit, new_cadence: str
+) -> None:
+    """Refuse a cadence change that would strand students off the new ladder.
+
+    Switching a 4-year School from semester to yearly shrinks every Programme's
+    ladder from 8 rungs to 4; a student at semester 7 would silently occupy a
+    position that no longer exists. Rather than rewrite real students' positions,
+    the change is refused and named.
+    """
+    programmes = (
+        [unit]
+        if unit.type == "program"
+        else list(await dao.descendants_of_type(session, unit.path, "program"))
+    )
+    for programme in programmes:
+        if programme.cadence is not None and programme.id != unit.id:
+            continue  # this Programme overrides; the School's value does not reach it
+        ladder = position_ladder(new_cadence, programme.duration_years)
+        highest = max(ladder) if ladder else 0
+        occupied = await onboarding_positions(session, programme.id)
+        stranded = sorted(p for p in occupied if p > highest)
+        if stranded:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{programme.name}' has students at position "
+                    f"{', '.join(str(p) for p in stranded)}, which '{new_cadence}' cadence "
+                    f"does not have (its ladder ends at {highest}). Move them first."
+                ),
+            )
+
+
+PositionReader = Callable[[AsyncSession, uuid.UUID], Awaitable[set[int]]]
+
+_position_reader: PositionReader | None = None
+
+
+def register_position_reader(reader: PositionReader) -> None:
+    """Let org ask which positions hold students without importing onboarding.
+
+    onboarding.service already imports org.service, so the reverse import would
+    be circular. Registration at startup keeps the dependency one-way, the same
+    inversion core/ uses for the token verifier.
+    """
+    global _position_reader
+    _position_reader = reader
+
+
+async def onboarding_positions(session: AsyncSession, program_id: uuid.UUID) -> set[int]:
+    """Positions currently occupied in a Programme; empty if nothing registered."""
+    if _position_reader is None:
+        return set()
+    return await _position_reader(session, program_id)
+
+
+async def get_setting(session: AsyncSession, key: str) -> str:
+    value = await dao.get_setting(session, key)
+    if value is None:
+        raise HTTPException(status_code=500, detail=f"Missing university setting '{key}'.")
+    return value
+
+
+async def set_setting(
+    session: AsyncSession, ctx: AuthContext, key: str, value: str
+) -> str:
+    before = await dao.get_setting(session, key)
+    await dao.set_setting(session, key, value, ctx.user_id)
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.setting.updated",
+        object_type="university_setting",
+        object_id=key,
+        before={"value": before},
+        after={"value": value},
+    )
+    await session.commit()
+    return value
+
+
 async def _get_or_404(session: AsyncSession, unit_id: uuid.UUID) -> OrgUnit:
     unit = await dao.get_by_id(session, unit_id)
     if unit is None:
@@ -246,6 +404,8 @@ async def create_section_instance(
     program_id: uuid.UUID,
     label: str,
     term_code: str,
+    position: int | None = None,
+    division_letter: str | None = None,
 ) -> OrgUnit:
     """Per-term Section instance (TTM-FR-19). Called by TTM term setup — not org admin.
 
@@ -273,6 +433,8 @@ async def create_section_instance(
         path=path,
         campus_code=program.campus_code,
         term_code=term_code,
+        position=position,
+        division_letter=division_letter,
     )
     session.add(section)
     await session.flush()
@@ -311,9 +473,7 @@ async def import_csv(
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
 
-    body = "\n".join(
-        line for line in text_content.splitlines() if not line.lstrip().startswith("#")
-    )
+    body = strip_comments(text_content)
     reader = csv.DictReader(io.StringIO(body))
     header = [h.strip() for h in (reader.fieldnames or [])]
     missing = set(ORG_CSV_COLUMNS) - set(header)
@@ -400,15 +560,25 @@ async def _import_catalogue_row(
     counts = {"created": 0, "updated": 0, "unchanged": 0}
     parent = root
 
-    for unit_type, code_field, name_field in (
-        ("faculty_division", "faculty_division_code", "faculty_division_name"),
-        ("school", "school_code", "school_name"),
-    ):
-        parent, outcome = await _upsert_unit(
-            session, ctx, parent, unit_type, _required(row, code_field),
-            _required(row, name_field), {},
+    parent, outcome = await _upsert_unit(
+        session, ctx, parent, "faculty_division",
+        _required(row, "faculty_division_code"), _required(row, "faculty_division_name"), {},
+    )
+    counts[outcome] += 1
+
+    # A School must declare its cadence — it decides every descendant Programme's
+    # position ladder, so an import that omits it would create Schools no student
+    # can be positioned in.
+    cadence = row.get("cadence", "").strip().lower()
+    if cadence not in CADENCES:
+        raise _OrgRowError(
+            "cadence", f"required for a School — must be one of: {', '.join(CADENCES)}"
         )
-        counts[outcome] += 1
+    parent, outcome = await _upsert_unit(
+        session, ctx, parent, "school", _required(row, "school_code"),
+        _required(row, "school_name"), {"cadence": cadence},
+    )
+    counts[outcome] += 1
 
     # Department is OPTIONAL (locked 28-07-2026): 12 of the university's 14
     # Schools have none, so a blank department column synthesises a default
@@ -501,6 +671,10 @@ async def _upsert_unit(
             if value is not None and getattr(existing, key) != value:
                 setattr(existing, key, value)
                 changed = True
+        if attrs.get("cadence") and existing.cadence_unconfirmed:
+            # An import stating the cadence is a decision, not the migration's guess.
+            existing.cadence_unconfirmed = False
+            changed = True
         if not changed:
             return existing, "unchanged"
         await audit_service.record(
@@ -549,6 +723,32 @@ async def update_unit(
     unit = await _get_or_404(session, unit_id)
     before = _snapshot(unit)
     applied = False
+
+    # Cadence and class-size cap live on Schools (and cadence may override on a
+    # Programme), so they take the School/Programme path rather than the
+    # Programmes-only path below.
+    if changes.get("cadence") is not None and unit.cadence != changes["cadence"]:
+        if unit.type not in ("school", "program"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Curriculum cadence applies to Schools and Programmes, not a {unit.type}.",
+            )
+        await _assert_cadence_change_safe(session, unit, cast(str, changes["cadence"]))
+        unit.cadence = cast(str, changes["cadence"])
+        # An explicit decision replaces the migration's guess.
+        unit.cadence_unconfirmed = False
+        applied = True
+    if changes.get("class_size_cap") is not None and unit.class_size_cap != changes[
+        "class_size_cap"
+    ]:
+        if unit.type != "school":
+            raise HTTPException(
+                status_code=422,
+                detail=f"The class-size cap is set per School, not on a {unit.type}.",
+            )
+        unit.class_size_cap = cast(int, changes["class_size_cap"])
+        applied = True
+
     for key in (
         "name",
         "level",

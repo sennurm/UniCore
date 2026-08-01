@@ -23,6 +23,7 @@ from unicore.core.db import get_engine, get_sessionmaker  # noqa: E402
 from unicore.core.security import AuthContext, register_token_verifier  # noqa: E402
 from unicore.main import create_app  # noqa: E402
 from unicore.modules.auth.providers import email_provider, sms_provider  # noqa: E402
+from unicore.modules.org.models import DEFAULT_UNIVERSITY_SETTINGS  # noqa: E402
 from unicore.modules.rbac import service as rbac_service  # noqa: E402
 from unicore.modules.rbac.models import Grant  # noqa: E402
 from unicore.modules.user import dao as user_dao  # noqa: E402
@@ -125,9 +126,20 @@ async def db(database: None) -> AsyncIterator[None]:
                 "TRUNCATE org_units, users, audit_events, grants, otp_challenges, "
                 "devices, device_change_requests, consent_records, grievances, "
                 "domain_events, academic_terms, import_batches, import_row_errors, "
-                "student_profiles, section_memberships CASCADE"
+                "student_profiles, section_memberships, batches CASCADE"
             )
         )
+        # University settings are configuration, not per-test data: restore the
+        # shipped defaults so a test that retunes one cannot leak into the next.
+        for key, value in DEFAULT_UNIVERSITY_SETTINGS.items():
+            await conn.execute(
+                text(
+                    "INSERT INTO university_settings (key, value) VALUES (:k, :v) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+                ),
+                {"k": key, "v": value},
+            )
+
     from unicore.core.redis import get_redis
 
     get_redis.cache_clear()

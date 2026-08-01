@@ -49,9 +49,9 @@ async def test_reallotment_preserves_history(make_client, campus, audit_rows) ->
             f"/onboarding/sections/{campus['section_3a']}/roster",
             params={"as_of": tomorrow.isoformat()},
         )
-    assert len(today_a) == 1        # still in 3A today — the move is dated
+    assert len(today_a) == 1  # still in 3A today — the move is dated
     assert len(future_b.json()) == 1  # in 3B from tomorrow
-    assert future_a.json() == []      # and out of 3A from tomorrow
+    assert future_a.json() == []  # and out of 3A from tomorrow
 
     async with get_sessionmaker()() as session:
         today_membership = await onb_service.membership_as_of(

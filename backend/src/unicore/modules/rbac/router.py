@@ -45,6 +45,15 @@ async def supersede(
     return GrantOut.model_validate(await service.supersede(session, ctx, payload))
 
 
+@router.get("/roles")
+async def list_roles(
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("rbac:read")),
+) -> list[dict[str, object]]:
+    """The role registry — what may be granted, and what unit type each binds to."""
+    return await service.list_roles(session)
+
+
 @router.get("/users/{user_id}/grants", response_model=list[GrantOut])
 async def list_user_grants(
     user_id: uuid.UUID,

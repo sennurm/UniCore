@@ -2,7 +2,8 @@
 
 Import-only provisioning (ONB): students arrive from the ERP as CSV, are validated
 row by row, committed partially (valid rows in, invalid rows to a downloadable error
-report), and upserted idempotently on SIF id. Sections are per-term instances
+report), and upserted idempotently on either student identifier — the SIF id
+issued at admission or the Enrollment No issued later. Sections are per-term instances
 created by the Timetable Cell; allotment is dated so history stays immutable.
 """
 
@@ -10,6 +11,7 @@ import csv
 import hashlib
 import io
 import uuid
+from dataclasses import dataclass
 from datetime import date, datetime
 
 from fastapi import HTTPException
@@ -17,11 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.core.logging import get_logger, timed
 from unicore.core.security import AuthContext
+from unicore.core.templates import strip_comments
 from unicore.modules.audit import service as audit_service
 from unicore.modules.auth import service as auth_service
 from unicore.modules.onboarding import dao
 from unicore.modules.onboarding.models import (
     RISKY_CHANGE_THRESHOLD,
+    Batch,
     ImportBatch,
     ImportRowError,
     SectionMembership,
@@ -37,7 +41,19 @@ from unicore.modules.rbac import service as rbac_service
 from unicore.modules.user import service as user_service
 
 MAX_FILE_BYTES = 50 * 1024 * 1024  # ONB §8 pre-parse gate
+STUDENT_ROLE = "student"
 IMPORT_ROLES = ("super-admin", "system-admin", "office-staff")
+# Holders of `onb:read` (rbac ACTIONS). Most are org-scoped, so every read of
+# student data must be checked against the caller's subtree — `onb:read` says the
+# caller may read *rosters*, not that they may read *this* roster (ONB §4).
+READ_ROLES = (
+    "super-admin",
+    "system-admin",
+    "office-staff",
+    "school-incharge",
+    "hod",
+    "class-incharge",
+)
 
 
 class RowError(Exception):
@@ -45,6 +61,33 @@ class RowError(Exception):
         self.field = field
         self.reason = reason
         super().__init__(f"{field}: {reason}")
+
+
+@dataclass(frozen=True)
+class ImportDefaults:
+    """Values chosen on the upload screen that fill **blank** cells only.
+
+    The file is authoritative wherever it speaks (ONB-FR-21): a single-Programme
+    intake needs no per-row values, a mixed ERP extract works untouched, and a
+    default can never silently overwrite a stated one.
+    """
+
+    program_code: str | None = None
+    position: int | None = None
+
+
+def _parse_position(raw: str, defaults: ImportDefaults | None) -> int:
+    """File value, else the screen default, else 1 (first year, first semester)."""
+    value = raw.strip()
+    if not value:
+        return (defaults.position if defaults and defaults.position else None) or 1
+    try:
+        position = int(value)
+    except ValueError:
+        raise RowError("position", f"'{value}' is not a number") from None
+    if position < 1:
+        raise RowError("position", "position starts at 1")
+    return position
 
 
 # --- import pipeline ---------------------------------------------------------
@@ -56,15 +99,17 @@ async def import_csv(
     filename: str,
     content: bytes,
     term_code: str,
+    defaults: ImportDefaults | None = None,
 ) -> ImportBatch:
-    """Pre-parse gate → row validation → partial commit → batch summary."""
+    """Pre-parse gate → row validation → partial commit → run summary."""
     _pre_parse_gate(content)
     try:
         text_content = content.decode("utf-8")
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
 
-    reader = csv.DictReader(io.StringIO(text_content))
+    # A downloaded template carries `#` notes; it must upload back unchanged.
+    reader = csv.DictReader(io.StringIO(strip_comments(text_content)))
     header = [h.strip() for h in (reader.fieldnames or [])]
     missing = set(CSV_COLUMNS_V1) - set(header)
     if missing:
@@ -83,7 +128,8 @@ async def import_csv(
     await session.flush()
 
     scope_paths = await rbac_service.scope_paths_for(ctx, IMPORT_ROLES)
-    seen_sif_ids: set[str] = set()
+    seen_ids: set[tuple[str, str]] = set()
+    new_batches: set[str] = set()
     created = updated = unchanged = rejected = 0
     risky_changes = 0
 
@@ -91,11 +137,16 @@ async def import_csv(
         for index, raw in enumerate(reader, start=2):  # row 1 is the header
             row = {k: (v or "").strip() for k, v in raw.items() if k}
             try:
-                sif_id = _require(row, "sif_id")
-                if sif_id in seen_sif_ids:
-                    raise RowError("sif_id", "in-file duplicate — first occurrence wins")
-                seen_sif_ids.add(sif_id)
-                outcome, risky = await _upsert_row(session, ctx, row, term_code, scope_paths)
+                # A row is identified by either id, so a duplicate of *either*
+                # is a duplicate of the student (ONB-FR-05).
+                identifiers = _row_identifiers(row)
+                clash = next((i for i in identifiers if i in seen_ids), None)
+                if clash is not None:
+                    raise RowError(clash[0], "in-file duplicate — first occurrence wins")
+                seen_ids.update(identifiers)
+                outcome, risky = await _upsert_row(
+                    session, ctx, row, term_code, scope_paths, defaults, new_batches
+                )
             except RowError as err:
                 rejected += 1
                 session.add(
@@ -116,6 +167,7 @@ async def import_csv(
             else:
                 unchanged += 1
 
+    batch.created_batches = sorted(new_batches)
     batch.rows_total = created + updated + unchanged + rejected
     batch.rows_created, batch.rows_updated = created, updated
     batch.rows_unchanged, batch.rows_rejected = unchanged, rejected
@@ -146,6 +198,7 @@ async def import_csv(
             "unchanged": unchanged,
             "rejected": rejected,
             "status": batch.status,
+            "batches_created": sorted(new_batches),
         },
     )
     await session.commit()
@@ -157,6 +210,19 @@ def _pre_parse_gate(content: bytes) -> None:
         raise HTTPException(status_code=422, detail="File is empty.")
     if len(content) > MAX_FILE_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds the 50 MB limit.")
+
+
+def _row_identifiers(row: dict[str, str]) -> list[tuple[str, str]]:
+    """The (field, value) identifiers a row carries — SIF id, Enrollment No, or both.
+
+    A student may be named by either, so in-file duplicate detection has to look
+    at both: two rows sharing only an enrollment number are still the same person.
+    """
+    return [
+        (field, row.get(field, "").strip())
+        for field in ("sif_id", "enrollment_id")
+        if row.get(field, "").strip()
+    ]
 
 
 def _require(row: dict[str, str], field: str) -> str:
@@ -172,13 +238,25 @@ async def _upsert_row(
     row: dict[str, str],
     term_code: str,
     scope_paths: list[str] | None,
+    defaults: ImportDefaults | None = None,
+    new_batches: set[str] | None = None,
 ) -> tuple[str, bool]:
     """Validate and upsert one row. Returns (outcome, risky_change)."""
-    sif_id = _require(row, "sif_id")
+    sif_id = row.get("sif_id", "").strip()
     enrollment_id = row.get("enrollment_id", "").strip()
+    if not sif_id and not enrollment_id:
+        raise RowError(
+            "sif_id/enrollment_id",
+            "give at least one identifier — the SIF id issued at admission or the "
+            "Enrollment No issued later",
+        )
     full_name = _require(row, "full_name")
     roll_number = _require(row, "roll_number")
-    program_code = _require(row, "program_code")
+    program_code = row.get("program_code", "").strip() or (
+        defaults.program_code if defaults else ""
+    )
+    if not program_code:
+        raise RowError("program_code", "mandatory field is missing")
     section_label = _require(row, "section_label")
     admission_year = _parse_year(row.get("admission_year", ""))
     dob = _parse_date(row.get("date_of_birth", ""))
@@ -188,6 +266,9 @@ async def _upsert_row(
         raise RowError("mobile/email", "no contact channel — credentials cannot be delivered")
 
     program = await _resolve_program(session, program_code, scope_paths)
+    # Screen pickers fill blanks only — a value in the file always wins (ONB-FR-21).
+    position = _parse_position(row.get("position", ""), defaults)
+    await validate_position(session, program, position)
     section = await org_service.find_section(session, program.id, section_label, term_code)
     if section is None:
         raise RowError(
@@ -195,12 +276,34 @@ async def _upsert_row(
             f"no Section '{section_label}' for term {term_code} — Timetable Cell must create it",
         )
 
-    # SIF is the join key at admission (the only id that exists then); once an
-    # enrollment number is issued either id resolves the same student, so a file
-    # carrying enrollment_id still matches (canonical-id decision, 28-07-2026).
-    existing = await user_service.get_by_sif_id(session, sif_id)
-    if existing is None and enrollment_id:
-        existing = await user_service.get_by_enrollment_id(session, enrollment_id)
+    # Either id resolves the same student (canonical-id decision, 28-07-2026).
+    # A file may carry one or the other: the SIF exists from admission, the
+    # Enrollment No is issued later, and a mid-programme extract often has only
+    # the latter.
+    by_sif = await user_service.get_by_sif_id(session, sif_id) if sif_id else None
+    by_enrollment = (
+        await user_service.get_by_enrollment_id(session, enrollment_id)
+        if enrollment_id
+        else None
+    )
+    if by_sif is not None and by_enrollment is not None and by_sif.id != by_enrollment.id:
+        raise RowError(
+            "enrollment_id",
+            f"'{sif_id}' and '{enrollment_id}' identify two different students — "
+            "one of them is wrong",
+        )
+    existing = by_sif or by_enrollment
+
+    if existing is None and not sif_id:
+        # Enrollment numbers are issued to students who already exist, so one
+        # matching nobody is a typo, not a new admission. Creating here would
+        # mint a phantom student that no later SIF-bearing feed could reconcile.
+        raise RowError(
+            "enrollment_id",
+            f"no student holds Enrollment No '{enrollment_id}'; a new student must "
+            "arrive with the SIF id issued at admission",
+        )
+
     if existing is None:
         user = await user_service.provision_student(
             session,
@@ -212,12 +315,17 @@ async def _upsert_row(
             mobile=mobile,
         )
         await _assert_roll_free(session, program.id, admission_year, roll_number, user.id)
+        batch, batch_is_new = await resolve_batch(session, program, admission_year, position)
+        if batch_is_new and new_batches is not None:
+            new_batches.add(batch.code)
         session.add(
             StudentProfile(
                 user_id=user.id,
                 program_id=program.id,
                 roll_number=roll_number,
                 admission_year=admission_year,
+                batch_id=batch.id,
+                position=position,
                 date_of_birth=dob,
                 gender=row.get("gender") or None,
             )
@@ -225,6 +333,12 @@ async def _upsert_row(
         if enrollment_id:
             await user_service.set_enrollment_id(session, ctx, user, enrollment_id)
         await session.flush()
+        # A student with no role can sign in and do nothing, so provisioning
+        # grants it in the same transaction (AUTH §1: students are in the RBAC
+        # model). Programme-scoped: Sections are per-term, membership is ONB's.
+        await rbac_service.ensure_sole_grant(
+            session, ctx, user.id, STUDENT_ROLE, program.id, "student provisioned"
+        )
         await _reallot(session, user.id, section.id, date.today())
         return "created", False
 
@@ -241,7 +355,8 @@ async def _upsert_row(
             setattr(existing, attr, value)
             changed = True
     if profile is not None:
-        if profile.program_id != program.id:
+        programme_moved = profile.program_id != program.id
+        if programme_moved:
             profile.program_id = program.id
             changed = risky = True
         if dob and profile.date_of_birth != dob:
@@ -250,8 +365,43 @@ async def _upsert_row(
         if profile.roll_number != roll_number:
             profile.roll_number = roll_number
             changed = True
+        if profile.position != position:
+            profile.position = position
+            changed = True
+        # A cohort is decided once, at first import, and recorded (ONB-FR-19) —
+        # re-deriving it on every re-import would let an edited admission_year
+        # quietly move students between cohorts. Two exceptions: a student who
+        # predates batches gets backfilled, and a Programme move necessarily
+        # changes cohort (that move is itself flagged risky above, so the §8
+        # guardrail already parks a feed doing it wholesale).
+        if profile.batch_id is None or programme_moved:
+            batch, batch_is_new = await resolve_batch(
+                session, program, admission_year, position
+            )
+            if batch_is_new and new_batches is not None:
+                new_batches.add(batch.code)
+            if profile.batch_id != batch.id:
+                profile.batch_id = batch.id
+                changed = True
+        else:
+            current = await dao.get_batch_by_id(session, profile.batch_id)
+            target_year = await cohort_year_for(session, program, admission_year, position)
+            if current is not None and current.joining_year != target_year:
+                raise RowError(
+                    "admission_year",
+                    f"student is already in batch '{current.code}'; moving cohorts is an "
+                    "explicit correction, not an import side effect",
+                )
     if enrollment_id and await user_service.set_enrollment_id(
         session, ctx, existing, enrollment_id
+    ):
+        changed = True
+    # Idempotent, so a re-import backfills students provisioned before the role
+    # existed rather than needing a separate migration pass.
+    # Sole, not merely present: a Programme move must relocate the grant rather
+    # than leave the student holding one on the Programme they left.
+    if await rbac_service.ensure_sole_grant(
+        session, ctx, existing.id, STUDENT_ROLE, program.id, "programme changed on import"
     ):
         changed = True
     membership = await dao.open_membership(session, existing.id)
@@ -398,6 +548,12 @@ async def transfer_student(
         raise HTTPException(status_code=422, detail="Target must be a Program.")
     before = {"program_id": str(profile.program_id)}
     profile.program_id = new_program_id
+    # Authorization follows the student: the grant on the old Programme is
+    # revoked in the same transaction, so they never hold one where they no
+    # longer study (AUTH §8).
+    await rbac_service.ensure_sole_grant(
+        session, ctx, user_id, STUDENT_ROLE, new_program_id, "programme transfer"
+    )
     if new_section_id is not None:
         await _reallot(session, user_id, new_section_id, when)
     else:
@@ -481,13 +637,37 @@ async def membership_as_of(
 
 
 async def section_roster(
-    session: AsyncSession, section_id: uuid.UUID, as_of: date | None = None
+    session: AsyncSession,
+    ctx: AuthContext,
+    section_id: uuid.UUID,
+    as_of: date | None = None,
 ) -> list[dict[str, object]]:
+    """A Section's roster as of a date (ONB-FR-17).
+
+    The Section id is client-supplied, so it is authorised against the caller's
+    own scope before any student data is read — otherwise any `onb:read` holder
+    (HoD, Class In-charge) could name a Section in another School and receive its
+    students' names, SIF/enrollment ids and credential-delivery state.
+    """
+    await rbac_service.ensure_scope_covers(session, ctx, READ_ROLES, section_id)
     memberships = await dao.section_roster_as_of(session, section_id, as_of or date.today())
+    batch_codes: dict[uuid.UUID, str] = {}
     roster: list[dict[str, object]] = []
     for m in memberships:
         user = await user_service.get_user(session, m.user_id)
         profile = await dao.get_profile(session, m.user_id)
+        year: int | None = None
+        batch_code: str | None = None
+        if profile is not None:
+            programme = await org_service.get_unit(session, profile.program_id)
+            cadence = await org_service.effective_cadence(session, programme)
+            # Year is derived from position, never stored (ONB-FR-20).
+            year = org_service.year_of(cadence, profile.position)
+            if profile.batch_id is not None:
+                if profile.batch_id not in batch_codes:
+                    batch = await dao.get_batch_by_id(session, profile.batch_id)
+                    batch_codes[profile.batch_id] = batch.code if batch else ""
+                batch_code = batch_codes[profile.batch_id] or None
         roster.append(
             {
                 "user_id": str(user.id),
@@ -497,17 +677,136 @@ async def section_roster(
                 "status": user.status,
                 "roll_number": profile.roll_number if profile else None,
                 "credential_delivery": profile.credential_delivery if profile else None,
+                "position": profile.position if profile else None,
+                "year": year,
+                "batch_code": batch_code,
             }
         )
     return roster
 
 
-async def list_batches(session: AsyncSession, limit: int) -> list[ImportBatch]:
-    return list(await dao.list_batches(session, limit))
+async def positions_in_programme(
+    session: AsyncSession, program_id: uuid.UUID
+) -> set[int]:
+    """Which ladder positions currently hold students — org uses this to refuse a
+    cadence change that would strand them off the new, shorter ladder."""
+    return set(await dao.count_students_by_position(session, program_id))
 
 
-async def batch_errors(session: AsyncSession, batch_id: uuid.UUID) -> list[ImportRowError]:
+async def headcount_by_position(
+    session: AsyncSession, program_id: uuid.UUID
+) -> dict[int, int]:
+    """Active students of a Programme per position — TTM sizes Sections with this."""
+    return await dao.count_students_by_position(session, program_id)
+
+
+async def cohort_year_for(
+    session: AsyncSession, program: org_service.OrgUnit, joining_year: int, position: int
+) -> int:
+    """The joining year of the cohort this student belongs to.
+
+    Normally their own joining year. A **lateral entrant** belongs to the cohort
+    they will *graduate* with instead: entering at semester 3 in 2026 means
+    sitting, being timetabled and graduating with the 2025 intake.
+
+    The offset comes from the Programme's declared `lateral_entry_semester`
+    (ONB-FR-19), **not** from whatever position the row happens to carry. Those
+    are different things — on a mid-programme backfill the position is where the
+    student is *now*, so treating it as an entry position would push a 2024
+    admission sitting in semester 3 into the 2023 cohort. A student is lateral
+    only when the Programme declares a lateral entry point and they sit on it.
+    """
+    lateral_at = program.lateral_entry_semester
+    if not lateral_at or lateral_at <= 1 or position != lateral_at:
+        return joining_year
+    cadence = await org_service.effective_cadence(session, program)
+    return joining_year - (org_service.year_of(cadence, lateral_at) - 1)
+
+
+async def resolve_batch(
+    session: AsyncSession, program: org_service.OrgUnit, joining_year: int, position: int
+) -> tuple[Batch, bool]:
+    """The student's admission cohort, created on first use (ONB-FR-19).
+
+    A lateral entrant belongs to the cohort they will *graduate* with, not their
+    literal joining year: entering at semester 3 in 2026 means sitting, being
+    timetabled and graduating with the 2025 intake.
+
+    The offset comes from the Programme's declared `lateral_entry_semester`
+    (ONB-FR-19), **not** from whatever position the row happens to carry. Those
+    are different things: on a mid-programme backfill the position is where the
+    student is *now*, so treating it as an entry position would push a 2024
+    admission at semester 3 into the 2023 cohort. A student is lateral only when
+    the Programme declares a lateral entry point and they are sitting on it.
+    """
+    cohort_year = await cohort_year_for(session, program, joining_year, position)
+    existing = await dao.find_batch(session, program.id, cohort_year)
+    if existing is not None:
+        return existing, False
+
+    template = await org_service.get_setting(session, "batch_name_template")
+    code = template.format(programme_code=program.code, joining_year=cohort_year)
+    batch = Batch(program_id=program.id, joining_year=cohort_year, code=code)
+    session.add(batch)
+    await session.flush()
+    get_logger().info(
+        "batch created", batch_code=code, program_code=program.code, joining_year=cohort_year
+    )
+    return batch, True
+
+
+async def validate_position(
+    session: AsyncSession, program: org_service.OrgUnit, position: int
+) -> None:
+    """A position outside the Programme's ladder is rejected, never clamped —
+    clamping would place a student in a term that does not exist."""
+    cadence = await org_service.effective_cadence(session, program)
+    ladder = org_service.position_ladder(cadence, program.duration_years)
+    if not ladder:
+        # No duration on the Programme means no known upper bound. Blocking the
+        # student would punish them for an incomplete catalogue row; Section
+        # generation is where the missing duration surfaces as a warning.
+        return
+    if position not in ladder:
+        raise RowError(
+            "position", f"position {position} is outside 1..{ladder[-1]} for '{program.code}'"
+        )
+
+
+async def _own_uploads_only(ctx: AuthContext) -> str | None:
+    """The uploader whose batches the caller may see, or None for university-wide.
+
+    ONB §4: nobody outside their scope sees another scope's import batches. An
+    ImportBatch carries no org unit of its own — a file may span Programmes — so a
+    scoped caller is limited to the batches they uploaded themselves, which is the
+    strictest reading and never over-shares. University-wide roles see everything.
+    """
+    scope_paths = await rbac_service.scope_paths_for(ctx, IMPORT_ROLES)
+    return None if scope_paths is None else ctx.user_id
+
+
+async def list_batches(session: AsyncSession, ctx: AuthContext, limit: int) -> list[ImportBatch]:
+    return list(await dao.list_batches(session, limit, await _own_uploads_only(ctx)))
+
+
+async def batch_errors(
+    session: AsyncSession, ctx: AuthContext, batch_id: uuid.UUID
+) -> list[ImportRowError]:
+    """Error rows quote the raw CSV line, so they carry the same PII as the import
+    itself and are gated by the same rule as the batch that produced them."""
+    await _require_batch_visible(session, ctx, batch_id)
     return list(await dao.batch_errors(session, batch_id))
+
+
+async def _require_batch_visible(
+    session: AsyncSession, ctx: AuthContext, batch_id: uuid.UUID
+) -> ImportBatch:
+    batch = await dao.get_batch(session, batch_id)
+    uploader = await _own_uploads_only(ctx)
+    # 404, not 403: a scoped caller learns nothing about batches outside their scope.
+    if batch is None or (uploader is not None and batch.uploaded_by != uploader):
+        raise HTTPException(status_code=404, detail="Import run not found.")
+    return batch
 
 
 async def confirm_batch(
@@ -574,9 +873,7 @@ async def import_enrollment_ids(
     except UnicodeDecodeError:
         raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
 
-    body = "\n".join(
-        line for line in text_content.splitlines() if not line.lstrip().startswith("#")
-    )
+    body = strip_comments(text_content)
     reader = csv.DictReader(io.StringIO(body))
     missing = set(ENROLLMENT_CSV_COLUMNS) - {h.strip() for h in (reader.fieldnames or [])}
     if missing:

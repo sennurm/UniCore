@@ -116,9 +116,7 @@ async def test_sixth_otp_attempt_invalidates(make_client) -> None:
         good = _last_code()
         wrong = "000000" if good != "000000" else "111111"
         for _ in range(5):
-            await admin.post(
-                "/auth/otp/verify", json={"challenge_id": challenge_id, "code": wrong}
-            )
+            await admin.post("/auth/otp/verify", json={"challenge_id": challenge_id, "code": wrong})
         final = await admin.post(
             "/auth/otp/verify", json={"challenge_id": challenge_id, "code": good}
         )
@@ -175,9 +173,7 @@ async def test_otp_disabled_issues_session_directly(make_client, monkeypatch) ->
         body = login.json()
         assert body["challenge_id"] is None
         assert body["token"]
-        me = await admin.get(
-            "/auth/me", headers={"Authorization": f"Bearer {body['token']}"}
-        )
+        me = await admin.get("/auth/me", headers={"Authorization": f"Bearer {body['token']}"})
         assert me.status_code == 200
     assert not sms_provider.outbox or "OTP" not in sms_provider.outbox[-1].body
 

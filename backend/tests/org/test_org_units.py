@@ -22,6 +22,7 @@ async def test_hierarchy_creation_builds_ltree_paths(make_client) -> None:
         school = (
             await _create(
                 client,
+                cadence="semester",
                 type="school",
                 name="School of Computational Engineering",
                 code="SOCE",
@@ -65,9 +66,7 @@ async def test_org_crud_restricted_to_super_admin(make_client, audit_rows) -> No
 async def test_section_creation_rejected_here(make_client) -> None:
     async with make_client("super-admin") as client:
         uni = (await _create(client, type="university", name="U", code="UNI")).json()
-        response = await _create(
-            client, type="section", name="3B", code="S3B", parent_id=uni["id"]
-        )
+        response = await _create(client, type="section", name="3B", code="S3B", parent_id=uni["id"])
     assert response.status_code == 422
     assert "TTM" in response.json()["detail"]
 
@@ -101,7 +100,9 @@ async def test_reparent_rewrites_subtree_paths(make_client) -> None:
         fd1 = (await _create(client, name="F1", code="F1", **fd)).json()
         fd2 = (await _create(client, name="F2", code="F2", **fd)).json()
         school = (
-            await _create(client, type="school", name="S", code="S1", parent_id=fd1["id"])
+            await _create(
+                client, cadence="semester", type="school", name="S", code="S1", parent_id=fd1["id"]
+            )
         ).json()
         dept = (
             await _create(client, type="department", name="D", code="D1", parent_id=school["id"])

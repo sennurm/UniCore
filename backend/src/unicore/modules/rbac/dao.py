@@ -9,6 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from unicore.modules.rbac.models import Grant, ReportingEdge, Role
 
 
+async def list_roles(session: AsyncSession) -> Sequence[Role]:
+    result = await session.execute(select(Role).order_by(Role.code))
+    return result.scalars().all()
+
+
 async def get_role(session: AsyncSession, code: str) -> Role | None:
     return await session.get(Role, code)
 

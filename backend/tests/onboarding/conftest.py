@@ -19,7 +19,9 @@ async def campus(make_client: Callable[..., httpx.AsyncClient]) -> dict[str, str
 
         uni = await unit(type="university", name="U", code="UNI")
         fd = await unit(type="faculty_division", name="FET", code="FET", parent_id=uni["id"])
-        school = await unit(type="school", name="SOCE", code="SOCE", parent_id=fd["id"])
+        school = await unit(
+            cadence="semester", type="school", name="SOCE", code="SOCE", parent_id=fd["id"]
+        )
         dept = await unit(type="department", name="CSE", code="CSE", parent_id=school["id"])
         program = await unit(type="program", name="BTech CSE", code="BT-CSE", parent_id=dept["id"])
         other_dept = await unit(type="department", name="MEC", code="MEC", parent_id=school["id"])
@@ -53,12 +55,21 @@ async def campus(make_client: Callable[..., httpx.AsyncClient]) -> dict[str, str
             assert created.status_code == 201, created.text
             sections[label] = created.json()["id"]
 
+        # A Section in a sibling Department — the target of scope-isolation checks.
+        other = await admin.post(
+            "/timetable/sections",
+            json={"program_id": other_program["id"], "label": "1A", "term_code": "2026-S1"},
+        )
+        assert other.status_code == 201, other.text
+
     return {
         "university": uni["id"],
         "school": school["id"],
         "department": dept["id"],
         "program": program["id"],
+        "other_department": other_dept["id"],
         "other_program": other_program["id"],
+        "other_section": other.json()["id"],
         "term_id": term_id,
         "section_3a": sections["3A"],
         "section_3b": sections["3B"],

@@ -14,9 +14,7 @@ SETUP_CTX = AuthContext(user_id="test-setup", session_id="s", role_names=("super
 async def test_audit_is_read_only_and_scoped(make_client) -> None:
     """TC-AUTH-014: no update/delete route exists; reads need the audit role."""
     async with make_client("system-admin") as admin:
-        await admin.post(
-            "/user", json={"username": "a.b", "full_name": "A B", "kind": "staff"}
-        )
+        await admin.post("/user", json={"username": "a.b", "full_name": "A B", "kind": "staff"})
         events = await admin.get("/audit/events", params={"action": "user.provisioned"})
         assert events.status_code == 200
         assert len(events.json()) == 1
@@ -33,28 +31,49 @@ async def test_audit_is_read_only_and_scoped(make_client) -> None:
 async def test_outbox_dispatch_drives_term_closure(make_client) -> None:
     """Phase 4 outbox: publish -> dispatch -> rbac revocation handler fires."""
     async with make_client("super-admin") as admin:
-        uni = (await admin.post(
-            "/org/units", json={"type": "university", "name": "U", "code": "UNI"}
-        )).json()
-        fd = (await admin.post(
-            "/org/units",
-            json={"type": "faculty_division", "name": "F", "code": "F1", "parent_id": uni["id"]},
-        )).json()
-        school = (await admin.post(
-            "/org/units",
-            json={"type": "school", "name": "S", "code": "S1", "parent_id": fd["id"]},
-        )).json()
-        dept = (await admin.post(
-            "/org/units",
-            json={"type": "department", "name": "D", "code": "D1", "parent_id": school["id"]},
-        )).json()
-        prog = (await admin.post(
-            "/org/units",
-            json={"type": "program", "name": "P", "code": "P1", "parent_id": dept["id"]},
-        )).json()
-        user = (await admin.post(
-            "/user", json={"username": "ic.x", "full_name": "IC X", "kind": "staff"}
-        )).json()
+        uni = (
+            await admin.post("/org/units", json={"type": "university", "name": "U", "code": "UNI"})
+        ).json()
+        fd = (
+            await admin.post(
+                "/org/units",
+                json={
+                    "type": "faculty_division",
+                    "name": "F",
+                    "code": "F1",
+                    "parent_id": uni["id"],
+                },
+            )
+        ).json()
+        school = (
+            await admin.post(
+                "/org/units",
+                json={
+                    "type": "school",
+                    "cadence": "semester",
+                    "name": "S",
+                    "code": "S1",
+                    "parent_id": fd["id"],
+                },
+            )
+        ).json()
+        dept = (
+            await admin.post(
+                "/org/units",
+                json={"type": "department", "name": "D", "code": "D1", "parent_id": school["id"]},
+            )
+        ).json()
+        prog = (
+            await admin.post(
+                "/org/units",
+                json={"type": "program", "name": "P", "code": "P1", "parent_id": dept["id"]},
+            )
+        ).json()
+        user = (
+            await admin.post(
+                "/user", json={"username": "ic.x", "full_name": "IC X", "kind": "staff"}
+            )
+        ).json()
 
         async with get_sessionmaker()() as session:
             section = await org_service.create_section_instance(

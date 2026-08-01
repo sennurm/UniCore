@@ -20,10 +20,10 @@ async def _user(client: httpx.AsyncClient, username: str) -> dict:
 async def test_reporting_resolves_holder_and_vacancy(make_client) -> None:
     async with make_client("super-admin") as admin:
         uni = await _unit(admin, type="university", name="U", code="UNI")
-        fd = await _unit(
-            admin, type="faculty_division", name="F", code="F1", parent_id=uni["id"]
+        fd = await _unit(admin, type="faculty_division", name="F", code="F1", parent_id=uni["id"])
+        school = await _unit(
+            admin, cadence="semester", type="school", name="S", code="S1", parent_id=fd["id"]
         )
-        school = await _unit(admin, type="school", name="S", code="S1", parent_id=fd["id"])
         dept = await _unit(admin, type="department", name="D", code="D1", parent_id=school["id"])
 
         hod_user = await _user(admin, "hod.rep")

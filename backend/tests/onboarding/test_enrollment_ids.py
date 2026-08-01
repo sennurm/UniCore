@@ -9,8 +9,9 @@ async def _import_students(client: httpx.AsyncClient, count: int) -> None:
     response = await client.post(
         "/onboarding/imports",
         data={"term_code": "2026-S1"},
-        files={"file": ("x.csv", csv_bytes([student_row(n) for n in range(1, count + 1)]),
-                        "text/csv")},
+        files={
+            "file": ("x.csv", csv_bytes([student_row(n) for n in range(1, count + 1)]), "text/csv")
+        },
     )
     assert response.status_code == 201, response.text
 
@@ -29,19 +30,20 @@ async def _assign(client: httpx.AsyncClient, pairs: list[tuple[str, str]]) -> di
     return response.json()
 
 
-async def test_enrollment_numbers_assigned_after_admission(
-    make_client, campus, audit_rows
-) -> None:
+async def test_enrollment_numbers_assigned_after_admission(make_client, campus, audit_rows) -> None:
     """Students onboard with SIF only; enrollment numbers arrive in a later upload."""
     async with make_client("system-admin") as staff:
         await _import_students(staff, 3)
         roster = (await staff.get(f"/onboarding/sections/{campus['section_3a']}/roster")).json()
         assert {r["enrollment_id"] for r in roster} == {None}  # not issued yet
 
-        result = await _assign(staff, [
-            ("SIF-00001", "TU2026CSE0001"),
-            ("SIF-00002", "TU2026CSE0002"),
-        ])
+        result = await _assign(
+            staff,
+            [
+                ("SIF-00001", "TU2026CSE0001"),
+                ("SIF-00002", "TU2026CSE0002"),
+            ],
+        )
         assert (result["rows_assigned"], result["rows_rejected"]) == (2, 0)
 
         roster = (await staff.get(f"/onboarding/sections/{campus['section_3a']}/roster")).json()
@@ -82,12 +84,15 @@ async def test_enrollment_numbers_are_university_wide_unique(make_client, campus
 async def test_row_errors_reported_without_failing_the_batch(make_client, campus) -> None:
     async with make_client("system-admin") as staff:
         await _import_students(staff, 1)
-        result = await _assign(staff, [
-            ("SIF-00001", "TU2026CSE0001"),          # valid
-            ("SIF-NOBODY", "TU2026CSE0002"),         # unknown student
-            ("SIF-00001", ""),                       # missing number
-            ("SIF-00001", "TU2026CSE0003"),          # ok, corrects row 1
-        ])
+        result = await _assign(
+            staff,
+            [
+                ("SIF-00001", "TU2026CSE0001"),  # valid
+                ("SIF-NOBODY", "TU2026CSE0002"),  # unknown student
+                ("SIF-00001", ""),  # missing number
+                ("SIF-00001", "TU2026CSE0003"),  # ok, corrects row 1
+            ],
+        )
     assert result["rows_rejected"] == 2
     fields = {e["field"] for e in result["errors"]}
     assert fields == {"sif_id", "enrollment_id"}
@@ -143,8 +148,6 @@ async def test_enrollment_supplied_at_import_and_matches_later(make_client, camp
         again = await upload([student_row(1, enrollment_id="TU2026CSE0001")])
         assert (again["rows_created"], again["rows_unchanged"]) == (0, 1)
 
-        directory = (
-            await staff.get("/rbac/directory", params={"search": "TU2026CSE0001"})
-        ).json()
+        directory = (await staff.get("/rbac/directory", params={"search": "TU2026CSE0001"})).json()
     assert len(directory) == 1
     assert directory[0]["sif_id"] == "SIF-00001"

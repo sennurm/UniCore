@@ -11,7 +11,9 @@ async def _tree(admin: httpx.AsyncClient) -> dict[str, str]:
 
     uni = await unit(type="university", name="U", code="UNI")
     fd = await unit(type="faculty_division", name="FET", code="FET", parent_id=uni["id"])
-    school = await unit(type="school", name="SOCE", code="SOCE", parent_id=fd["id"])
+    school = await unit(
+        cadence="semester", type="school", name="SOCE", code="SOCE", parent_id=fd["id"]
+    )
     dept = await unit(type="department", name="CSE", code="CSE", parent_id=school["id"])
     return {"school": school["id"], "dept": dept["id"], "dept_path": dept["path"]}
 
@@ -69,9 +71,7 @@ async def test_csv_round_trip_grants_and_revokes(make_client, audit_rows) -> Non
         import csv as _csv
         import io as _io
 
-        body = "\n".join(
-            ln for ln in export.text.splitlines() if not ln.lstrip().startswith("#")
-        )
+        body = "\n".join(ln for ln in export.text.splitlines() if not ln.lstrip().startswith("#"))
         rows = list(_csv.DictReader(_io.StringIO(body)))
         for row in rows:
             if row["username"] == "alice.staff":
@@ -83,10 +83,12 @@ async def test_csv_round_trip_grants_and_revokes(make_client, audit_rows) -> Non
         writer.writeheader()
         writer.writerows(rows)
 
-        result = (await admin.post(
-            "/rbac/directory/imports",
-            files={"file": ("roles.csv", out.getvalue().encode(), "text/csv")},
-        )).json()
+        result = (
+            await admin.post(
+                "/rbac/directory/imports",
+                files={"file": ("roles.csv", out.getvalue().encode(), "text/csv")},
+            )
+        ).json()
         assert result["rows_rejected"] == 0, result["errors"]
         assert result["grants_issued"] == 1
         assert result["grants_revoked"] == 1
@@ -110,10 +112,12 @@ async def test_csv_errors_are_reported_per_row(make_client) -> None:
             "carol.staff,Carol,staff,active,not-a-role\n"
             "carol.staff,Carol,staff,active,hod@uni.nowhere\n"
         )
-        result = (await admin.post(
-            "/rbac/directory/imports",
-            files={"file": ("roles.csv", payload.encode(), "text/csv")},
-        )).json()
+        result = (
+            await admin.post(
+                "/rbac/directory/imports",
+                files={"file": ("roles.csv", payload.encode(), "text/csv")},
+            )
+        ).json()
     assert result["grants_issued"] == 1  # carol gets system-admin
     assert result["rows_rejected"] == 3
     reasons = " ".join(str(e["reason"]) for e in result["errors"])

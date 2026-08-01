@@ -22,6 +22,11 @@ from sqlalchemy.types import UserDefinedType
 from unicore.core.db import Base
 
 UNIT_TYPES = ("university", "faculty_division", "school", "department", "program", "section")
+CADENCES = ("semester", "yearly")
+
+# Positions per academic year, by cadence. A 4-year semester Programme has an
+# 8-rung ladder; a 4-year yearly Programme has 4.
+POSITIONS_PER_YEAR: dict[str, int] = {"semester": 2, "yearly": 1}
 
 # Legal parent type for each child type (AUTH-FR-19 hierarchy).
 PARENT_TYPE_OF: dict[str, str | None] = {
@@ -41,6 +46,36 @@ class Ltree(UserDefinedType[str]):
 
     def get_col_spec(self, **kw: Any) -> str:
         return "ltree"
+
+
+# Shipped defaults for `university_settings`. The migration inserts these
+# literally (migrations must not import app code); this is what the running
+# system — and the test reset — considers the baseline.
+DEFAULT_UNIVERSITY_SETTINGS: dict[str, str] = {
+    "class_size_cap": "60",
+    "batch_name_template": "{programme_code}-{joining_year}",
+    "section_label_template_semester": "{position_roman} Semester - {letter}",
+    "section_label_template_yearly": "{position_roman} Year - {letter}",
+}
+
+
+class UniversitySetting(Base):
+    """University-wide configuration a Super Admin may change without a deploy:
+    the class-size default, the batch-code template, the Section-label templates.
+
+    Deliberately key/value rather than columns — these are naming and threshold
+    knobs the university expects to retune, and each one arriving as a migration
+    would be friction with no safety benefit.
+    """
+
+    __tablename__ = "university_settings"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(String(200), nullable=False)
+    updated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class OrgUnit(Base):
@@ -67,6 +102,20 @@ class OrgUnit(Base):
     )
     # Per-term Section instances only (TTM-FR-19); NULL for all other unit types.
     term_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Section instances carry their place in the ladder + division letter, so the
+    # display label is rendered from a template rather than parsed back out.
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    division_letter: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    # Curriculum cadence (AUTH-FR-19): mandatory on a School, an optional override
+    # on a Programme. NULL everywhere else — see the placement check constraint.
+    cadence: Mapped[str | None] = mapped_column(
+        Enum(*CADENCES, name="curriculum_cadence", create_type=False), nullable=True
+    )
+    # True while a School's cadence is the migration's guess rather than a
+    # School Incharge's decision.
+    cadence_unconfirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # School-level override of the university-wide class-size cap (TTM-FR-24).
+    class_size_cap: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Programme attributes (Program units only) — from the university course catalogue.
     level: Mapped[str | None] = mapped_column(String(40), nullable=True)
     duration_years: Mapped[int | None] = mapped_column(Integer, nullable=True)

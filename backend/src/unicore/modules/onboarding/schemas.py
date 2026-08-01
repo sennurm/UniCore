@@ -21,6 +21,7 @@ CSV_COLUMNS_V1 = (
     "program_code",
     "section_label",
     "admission_year",
+    "position",
     "roll_number",
     "enrollment_id",
 )
@@ -43,6 +44,7 @@ register(
                 "program_code": "BT-CSE",
                 "section_label": "3B",
                 "admission_year": "2026",
+                "position": "1",
                 "roll_number": "21CS1043",
                 "enrollment_id": "",
             },
@@ -56,6 +58,7 @@ register(
                 "program_code": "BT-CSE",
                 "section_label": "3B",
                 "admission_year": "2026",
+                "position": "3",
                 "roll_number": "21CS1044",
                 "enrollment_id": "",
             },
@@ -70,12 +73,14 @@ register(
                 "program_code": "BT-CSE",
                 "section_label": "3A",
                 "admission_year": "2026",
+                "position": "",
                 "roll_number": "21CS1045",
                 "enrollment_id": "",
             },
             {
-                # Email only, and a different Program + Section.
-                "sif_id": "SIF-2026-000126",
+                # Enrollment No only — a continuing student whose extract no
+                # longer carries the SIF. Matches on the enrollment number.
+                "sif_id": "",
                 "full_name": "Joseph Mathew",
                 "date_of_birth": "09-06-2006",
                 "gender": "M",
@@ -83,29 +88,45 @@ register(
                 "email": "joseph.m@student.example.edu",
                 "program_code": "BT-AIDS",
                 "section_label": "1A",
-                "admission_year": "2026",
+                "admission_year": "2025",
+                "position": "3",
                 "roll_number": "21AD1002",
+                "enrollment_id": "TU2025AID0002",
             },
         ),
         notes=(
-            "SAMPLE DATA — the four rows below show the expected shape (two students "
-            "in one Section, one mobile-only, one email-only in another Program). "
-            "Replace them with your own rows before uploading.",
-            "Mandatory: sif_id, full_name, program_code, section_label, admission_year, "
-            "roll_number. Optional: date_of_birth, gender.",
-            "sif_id is the SIF number issued when admission completes — the key rows "
-            "are matched on, because it is the only id a new student has.",
-            "enrollment_id is the student's CANONICAL number but is issued later, so "
-            "leave it blank at admission and assign it with the 'enrollment-ids' "
-            "template. If you already have it, filling it in here works too.",
+            "SAMPLE DATA — the four rows below show the expected shape: two students "
+            "in one Section, one mobile-only, and one continuing student named by "
+            "enrollment number alone. Replace them with your own rows before uploading.",
+            "Mandatory: full_name, program_code, section_label, admission_year, "
+            "roll_number, and AT LEAST ONE OF sif_id / enrollment_id. "
+            "Optional: date_of_birth, gender.",
+            "IDENTIFIERS — every row must name the student by at least one of the two, "
+            "and may carry both. sif_id is issued when admission completes, so it is "
+            "the only id a brand-new student has; enrollment_id is the CANONICAL "
+            "number, issued later. A row is matched on whichever it carries.",
+            "A row with only an enrollment_id UPDATES an existing student — it never "
+            "creates one, because an enrollment number that matches nobody is a typo "
+            "rather than a new admission. New students must arrive with a sif_id.",
+            "If a row carries both and they point at two different students, it is "
+            "rejected: one of the two is wrong.",
             "At least ONE of mobile/email is required — that is how initial credentials "
             "reach the student. Rows with neither are rejected.",
             "Dates are DD-MM-YYYY (15-08-2006). Roll numbers come from the ERP and must "
-            "be unique within a Program + admission year.",
+            "be unique within a Batch (Program + joining year).",
+            "position is where the student currently sits in the ladder: the SEMESTER "
+            "number for a semester-cadence Programme (1, 2, 3 …), or the YEAR number "
+            "for a yearly one. Leave it blank for a fresh intake — blank means "
+            "position 1, first year first semester. The upload screen's picker fills "
+            "blanks only, so a value here always wins.",
+            "The student's Batch (admission cohort, e.g. BT-CSE-2026) is derived from "
+            "program_code + admission_year and created automatically — there is no "
+            "column for it. Lateral entrants joining above position 1 are placed in "
+            "the cohort they will graduate with, not their literal joining year.",
             "program_code must resolve within your scope, and the Section must already "
             "exist for the term you pick at upload time (see the 'sections' template).",
-            "Re-uploading is safe: rows are matched on sif_id and updated, never "
-            "duplicated.",
+            "Re-uploading is safe: rows are matched on whichever identifier they "
+            "carry and updated, never duplicated.",
         ),
     )
 )
@@ -122,6 +143,7 @@ class BatchOut(BaseModel):
     rows_unchanged: int
     rows_rejected: int
     uploaded_by: str
+    created_batches: list[str]
     created_at: datetime
 
     model_config = {"from_attributes": True}

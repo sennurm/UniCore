@@ -2,8 +2,9 @@
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from unicore.core.templates import CsvTemplate, register
 
@@ -14,6 +15,21 @@ class OrgUnitCreate(BaseModel):
     code: str = Field(min_length=1, max_length=50, pattern=r"^[A-Za-z0-9_-]+$")
     parent_id: uuid.UUID | None = None
     campus_code: str | None = None
+    # Mandatory on a School, optional override on a Programme, meaningless
+    # elsewhere (AUTH-FR-19). Rejected up front rather than by the DB constraint
+    # so the caller gets a sentence instead of a check-violation.
+    cadence: Literal["semester", "yearly"] | None = None
+    class_size_cap: int | None = Field(default=None, ge=1, le=500)
+
+    @model_validator(mode="after")
+    def _cadence_placement(self) -> "OrgUnitCreate":
+        if self.type == "school" and self.cadence is None:
+            raise ValueError(
+                "a School must declare its curriculum cadence ('semester' or 'yearly')"
+            )
+        if self.cadence is not None and self.type not in ("school", "program"):
+            raise ValueError(f"a {self.type} does not carry a curriculum cadence")
+        return self
 
 
 class OrgUnitRename(BaseModel):
@@ -41,6 +57,11 @@ class OrgUnitOut(BaseModel):
     industry_partner: str | None = None
     internship_months: int | None = None
     lateral_entry_semester: int | None = None
+    cadence: str | None = None
+    cadence_unconfirmed: bool = False
+    class_size_cap: int | None = None
+    position: int | None = None
+    division_letter: str | None = None
     auto_created: bool = False
     created_at: datetime
 
@@ -61,6 +82,8 @@ class OrgUnitUpdate(BaseModel):
     internship_months: int | None = Field(default=None, ge=0, le=36)
     lateral_entry_semester: int | None = Field(default=None, ge=1, le=12)
     campus_code: str | None = None
+    cadence: Literal["semester", "yearly"] | None = None
+    class_size_cap: int | None = Field(default=None, ge=1, le=500)
 
 
 # Flat catalogue import (locked 28-07-2026). One row per Programme, ancestors as
@@ -72,6 +95,7 @@ ORG_CSV_COLUMNS = (
     "faculty_division_name",
     "school_code",
     "school_name",
+    "cadence",
     "department_code",
     "department_name",
     "programme_code",
@@ -116,6 +140,7 @@ register(
                 "faculty_division_name": "Faculty of Engineering & Technology",
                 "school_code": "SCOPE",
                 "school_name": "School of Computational Engineering",
+                "cadence": "semester",
                 "department_code": "CSE",
                 "department_name": "Computer Science & Engineering",
                 "programme_code": "BT-CSE",
@@ -133,6 +158,7 @@ register(
                 "faculty_division_name": "Faculty of Engineering & Technology",
                 "school_code": "SCOPE",
                 "school_name": "School of Computational Engineering",
+                "cadence": "semester",
                 "department_code": "CSE",
                 "department_name": "Computer Science & Engineering",
                 "programme_code": "BT-CSE-CYBER",
@@ -152,6 +178,7 @@ register(
                 "faculty_division_name": "Faculty of Health Sciences",
                 "school_code": "SAHS",
                 "school_name": "School of Allied Health Sciences",
+                "cadence": "semester",
                 "department_code": "",
                 "department_name": "",
                 "programme_code": "B-OPTOM",
@@ -169,6 +196,7 @@ register(
                 "faculty_division_name": "Faculty of Health Sciences",
                 "school_code": "SOP",
                 "school_name": "School of Pharmacy",
+                "cadence": "semester",
                 "department_code": "",
                 "department_name": "",
                 "programme_code": "B-PHARM",
@@ -188,6 +216,12 @@ register(
             "own rows before uploading.",
             "ONE ROW PER PROGRAMME. Repeat the Faculty Division / School / Department "
             "columns on every row — they are created once and reused.",
+            "cadence is MANDATORY on every row: 'semester' or 'yearly', the School's "
+            "curriculum rhythm. It sets each Programme's position ladder (a 4-year "
+            "semester Programme has 8 positions, a yearly one has 4), so it drives "
+            "Section generation, student positions and promotion. A Programme that "
+            "genuinely differs from its School — a PhD under a semester School — is "
+            "overridden individually afterwards, not in this file.",
             "Faculty Division, School and Programme codes/names are mandatory. "
             "DEPARTMENT IS OPTIONAL: leave both department columns blank for Schools "
             "that have no departments, and a default Department mirroring the School "

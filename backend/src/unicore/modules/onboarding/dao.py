@@ -4,10 +4,11 @@ import uuid
 from collections.abc import Sequence
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.modules.onboarding.models import (
+    Batch,
     ImportBatch,
     ImportRowError,
     SectionMembership,
@@ -19,10 +20,14 @@ async def get_batch(session: AsyncSession, batch_id: uuid.UUID) -> ImportBatch |
     return await session.get(ImportBatch, batch_id)
 
 
-async def list_batches(session: AsyncSession, limit: int) -> Sequence[ImportBatch]:
-    result = await session.execute(
-        select(ImportBatch).order_by(ImportBatch.created_at.desc()).limit(limit)
-    )
+async def list_batches(
+    session: AsyncSession, limit: int, uploaded_by: str | None = None
+) -> Sequence[ImportBatch]:
+    """`uploaded_by` filters in the query — a scoped caller's rows never leave the DB."""
+    query = select(ImportBatch).order_by(ImportBatch.created_at.desc()).limit(limit)
+    if uploaded_by is not None:
+        query = query.where(ImportBatch.uploaded_by == uploaded_by)
+    result = await session.execute(query)
     return result.scalars().all()
 
 
@@ -37,6 +42,57 @@ async def batch_errors(session: AsyncSession, batch_id: uuid.UUID) -> Sequence[I
 
 async def get_profile(session: AsyncSession, user_id: uuid.UUID) -> StudentProfile | None:
     return await session.get(StudentProfile, user_id)
+
+
+async def count_students_by_position(
+    session: AsyncSession, program_id: uuid.UUID
+) -> dict[int, int]:
+    """Students of a Programme grouped by position, for Section sizing.
+
+    Counts `imported` as well as `active`: a freshly imported intake has not
+    collected its credentials yet, and those are exactly the students Sections
+    are being generated for. Only `withdrawn`/`deactivated` are excluded.
+
+    Aggregated in SQL — one row per position rather than per student — because
+    Section generation asks this for every Programme in a School at once.
+    `users` is reached by raw SQL rather than by importing the user module's
+    model: the FK already couples these tables, and the alternative (loading
+    every student to filter in Python) is what the module rule exists to prevent.
+    """
+    result = await session.execute(
+        text(
+            "SELECT sp.position AS position, COUNT(*) AS n "
+            "FROM student_profiles sp JOIN users u ON u.id = sp.user_id "
+            "WHERE sp.program_id = :program_id AND u.status IN ('active', 'imported') "
+            "GROUP BY sp.position"
+        ),
+        {"program_id": str(program_id)},
+    )
+    return {row.position: row.n for row in result}
+
+
+async def get_batch_by_id(session: AsyncSession, batch_id: uuid.UUID) -> Batch | None:
+    return await session.get(Batch, batch_id)
+
+
+async def find_batch(
+    session: AsyncSession, program_id: uuid.UUID, joining_year: int
+) -> Batch | None:
+    result = await session.execute(
+        select(Batch).where(Batch.program_id == program_id, Batch.joining_year == joining_year)
+    )
+    return result.scalar_one_or_none()
+
+
+async def list_batches_for_programs(
+    session: AsyncSession, program_ids: list[uuid.UUID]
+) -> Sequence[Batch]:
+    if not program_ids:
+        return []
+    result = await session.execute(
+        select(Batch).where(Batch.program_id.in_(program_ids)).order_by(Batch.code)
+    )
+    return result.scalars().all()
 
 
 async def roll_number_holder(

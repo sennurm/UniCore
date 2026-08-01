@@ -41,6 +41,17 @@ async def approved_term(
     return result.scalar_one_or_none()
 
 
+async def list_all_terms(session: AsyncSession) -> Sequence[AcademicTerm]:
+    """Every School's terms in one shot — the term-setup screen shows calendar
+    status beside each School, which would otherwise be one request per School."""
+    result = await session.execute(
+        select(AcademicTerm).order_by(
+            AcademicTerm.term_code.desc(), AcademicTerm.version.desc()
+        )
+    )
+    return result.scalars().all()
+
+
 async def list_terms(session: AsyncSession, school_id: uuid.UUID) -> Sequence[AcademicTerm]:
     result = await session.execute(
         select(AcademicTerm)

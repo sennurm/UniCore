@@ -45,9 +45,24 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "grievance:resolve": ("super-admin", "system-admin"),
     "ttm:term-upload": ("super-admin", "system-admin", "office-staff"),
     "ttm:term-approve": ("super-admin", "school-incharge"),
+    # Applying one calendar across Schools is a university-level act: a School's
+    # own staff may upload only for their School (ttm:term-upload).
+    "ttm:term-upload-multi": ("super-admin", "system-admin", "registrar",
+                              "dean-academic-affairs"),
+    # Narrow, one-way backfill of a field added after calendars existed; it is the
+    # Timetable Cell that is blocked by a missing parity, so they hold it too.
+    "ttm:term-set-parity": ("super-admin", "system-admin", "office-staff",
+                            "school-incharge", "timetable-cell"),
     "ttm:term-read": ("super-admin", "system-admin", "office-staff", "school-incharge",
                       "timetable-cell", "hod"),
     "ttm:section-create": ("super-admin", "system-admin", "timetable-cell"),
+    "ttm:section-read": ("super-admin", "system-admin", "timetable-cell", "school-incharge",
+                         "office-staff", "hod"),
+    # CSV upload templates carry column definitions and sample rows, no real data —
+    # but the project rule admits no unrolechecked endpoint, so they gate on the
+    # roles that actually perform bulk uploads.
+    "templates:read": ("super-admin", "system-admin", "office-staff", "timetable-cell",
+                       "school-incharge"),
     "onb:import": ("super-admin", "system-admin", "office-staff"),
     "onb:read": ("super-admin", "system-admin", "office-staff", "school-incharge", "hod",
                  "class-incharge"),
@@ -60,6 +75,9 @@ ACTIONS: dict[str, tuple[str, ...]] = {
 # Who may issue a given role (AUTH §4 matrix). Default: admins only.
 GRANTERS: dict[str, tuple[str, ...]] = {
     "class-incharge": ("hod", "system-admin", "super-admin"),  # AUTH-FR-15
+    # Student grants are issued by the import that provisions the student, and
+    # imports are run by School office staff within their own scope.
+    "student": ("office-staff", "system-admin", "super-admin"),
 }
 DEFAULT_GRANTERS: tuple[str, ...] = ("system-admin", "super-admin")
 
@@ -121,28 +139,33 @@ async def effective_grants(ctx: AuthContext) -> list[GrantView]:
     return [g for g in await _load_grants(ctx.user_id) if g.valid_now(now)]
 
 
+async def check_permission(request: Request, action: str) -> AuthContext:
+    """Assert the authenticated caller may perform `action`. Fails closed."""
+    ctx: AuthContext | None = getattr(request.state, "auth", None)
+    if ctx is None:  # gate bypassed somehow — refuse rather than trust
+        raise HTTPException(status_code=401, detail="Unauthenticated.")
+    allowed = ACTIONS.get(action)
+    if allowed is None:
+        raise HTTPException(status_code=403, detail=f"Unknown action: {action}.")
+    matched = [g for g in await effective_grants(ctx) if g.role_code in allowed]
+    if not matched:
+        get_logger().warning("permission denied", action=action)
+        raise HTTPException(status_code=403, detail=f"Not permitted: {action}.")
+    for g in matched:
+        if g.singleton and not await _singleton_intact(g):
+            get_logger().error(
+                "singleton anomaly: multiple active holders — failing closed",
+                role=g.role_code,
+            )
+            raise HTTPException(status_code=403, detail="Role state anomaly; access denied.")
+    return ctx
+
+
 def require_permission(action: str):  # noqa: ANN201 — returns a FastAPI dependency
-    """Dependency factory: asserts the authenticated caller may perform `action`."""
+    """Dependency factory over `check_permission`, declared per endpoint."""
 
     async def dependency(request: Request) -> AuthContext:
-        ctx: AuthContext | None = getattr(request.state, "auth", None)
-        if ctx is None:  # gate bypassed somehow — refuse rather than trust
-            raise HTTPException(status_code=401, detail="Unauthenticated.")
-        allowed = ACTIONS.get(action)
-        if allowed is None:
-            raise HTTPException(status_code=403, detail=f"Unknown action: {action}.")
-        matched = [g for g in await effective_grants(ctx) if g.role_code in allowed]
-        if not matched:
-            get_logger().warning("permission denied", action=action)
-            raise HTTPException(status_code=403, detail=f"Not permitted: {action}.")
-        for g in matched:
-            if g.singleton and not await _singleton_intact(g):
-                get_logger().error(
-                    "singleton anomaly: multiple active holders — failing closed",
-                    role=g.role_code,
-                )
-                raise HTTPException(status_code=403, detail="Role state anomaly; access denied.")
-        return ctx
+        return await check_permission(request, action)
 
     return dependency
 
@@ -189,6 +212,59 @@ async def ensure_scope_covers(
         ):
             return
     raise HTTPException(status_code=403, detail="Target is outside your scope.")
+
+
+async def list_roles(session: AsyncSession) -> list[dict[str, object]]:
+    """The role registry, so callers stop hardcoding it (the Users & roles screen
+    carried a literal list that had already drifted out of date)."""
+    return [
+        {
+            "code": r.code,
+            "name": r.name,
+            "unit_type": r.unit_type,
+            "singleton": r.singleton,
+            "term_bound": r.term_bound,
+        }
+        for r in await dao.list_roles(session)
+    ]
+
+
+async def ensure_sole_grant(
+    session: AsyncSession,
+    ctx: AuthContext,
+    user_id: uuid.UUID,
+    role_code: str,
+    org_unit_id: uuid.UUID,
+    reason: str,
+) -> bool:
+    """Make `org_unit_id` the *only* unit at which the user holds `role_code`.
+
+    Grants it if missing, and revokes the same role on any other unit. Returns
+    True if anything changed, so callers can report it as a real diff.
+
+    Used for the `student` role, which is one-Programme-at-a-time: a transfer
+    must move the grant, not add a second one. Idempotent, so student import can
+    call it on every row — an intake of 15,000 cannot be granted by hand, and a
+    re-import must not pile up duplicates.
+    """
+    changed = False
+    held_here = False
+    for grant, _role in await dao.active_grants_for_user(session, user_id):
+        if grant.role_code != role_code:
+            continue
+        if grant.org_unit_id == org_unit_id:
+            held_here = True
+        else:
+            await revoke_grant(session, ctx, grant.id, reason)
+            changed = True
+    if not held_here:
+        await create_grant(
+            session,
+            ctx,
+            GrantCreate(user_id=user_id, role_code=role_code, org_unit_id=org_unit_id),
+        )
+        changed = True
+    return changed
 
 
 async def create_grant(session: AsyncSession, ctx: AuthContext, data: GrantCreate) -> Grant:

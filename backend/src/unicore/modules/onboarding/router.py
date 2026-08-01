@@ -27,12 +27,23 @@ router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 async def import_csv(
     term_code: str = Form(...),
     file: UploadFile = File(...),
+    default_program_code: str | None = Form(default=None),
+    default_position: int | None = Form(default=None),
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:import")),
 ) -> BatchOut:
+    """The two `default_*` fields are the upload screen's pickers; they fill blank
+    cells only, so a value in the file always wins (ONB-FR-21)."""
     content = await file.read()
     batch = await service.import_csv(
-        session, ctx, file.filename or "upload.csv", content, term_code
+        session,
+        ctx,
+        file.filename or "upload.csv",
+        content,
+        term_code,
+        service.ImportDefaults(
+            program_code=default_program_code, position=default_position
+        ),
     )
     return BatchOut.model_validate(batch)
 
@@ -43,7 +54,7 @@ async def list_batches(
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> list[BatchOut]:
-    batches = await service.list_batches(session, limit)
+    batches = await service.list_batches(session, ctx, limit)
     return [BatchOut.model_validate(b) for b in batches]
 
 
@@ -53,7 +64,7 @@ async def batch_errors(
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> list[RowErrorOut]:
-    errors = await service.batch_errors(session, batch_id)
+    errors = await service.batch_errors(session, ctx, batch_id)
     return [RowErrorOut.model_validate(e) for e in errors]
 
 
@@ -63,7 +74,7 @@ async def error_report(
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> PlainTextResponse:
-    errors = await service.batch_errors(session, batch_id)
+    errors = await service.batch_errors(session, ctx, batch_id)
     return PlainTextResponse(
         service.error_report_csv(errors),
         media_type="text/csv",
@@ -160,4 +171,4 @@ async def section_roster(
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> list[dict[str, object]]:
-    return await service.section_roster(session, section_id, as_of)
+    return await service.section_roster(session, ctx, section_id, as_of)
