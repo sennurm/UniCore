@@ -270,6 +270,38 @@ async def list_offerings(
     return [(offering, subject) for offering, subject in result.all()]
 
 
+async def lock_offering(
+    session: AsyncSession, offering_id: uuid.UUID
+) -> SubjectOffering | None:
+    """Fetch an offering with a row lock held to the end of the transaction.
+
+    Elective capacity cannot be enforced by check-then-insert: two students
+    taking the last seat concurrently would both read "1 free" and both commit.
+    Serialising on this row is what makes the seat count true.
+    """
+    result = await session.execute(
+        select(SubjectOffering).where(SubjectOffering.id == offering_id).with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
+async def count_offering_takers(
+    session: AsyncSession, offering_ids: list[uuid.UUID], term_code: str
+) -> dict[uuid.UUID, int]:
+    """Seats taken per offering for a term — aggregated in SQL, one query for
+    the whole list, because the options screen asks for every offering at once."""
+    if not offering_ids:
+        return {}
+    result = await session.execute(
+        text(
+            "SELECT offering_id, COUNT(*) AS n FROM student_elective_choices "
+            "WHERE term_code = :term AND offering_id = ANY(:ids) GROUP BY offering_id"
+        ),
+        {"term": term_code, "ids": [str(i) for i in offering_ids]},
+    )
+    return {row.offering_id: row.n for row in result}
+
+
 async def get_venue_by_code(session: AsyncSession, code: str) -> Venue | None:
     result = await session.execute(select(Venue).where(Venue.code == code))
     return result.scalar_one_or_none()

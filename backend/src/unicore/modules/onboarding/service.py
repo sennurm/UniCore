@@ -1130,7 +1130,7 @@ async def elective_options(
         raise HTTPException(status_code=404, detail="No student record for this account.")
 
     offerings = await org_service.list_offerings(
-        session, profile.program_id, profile.position, kind="elective"
+        session, profile.program_id, profile.position, kind="elective", term_code=term_code
     )
     chosen = {
         choice.elective_group: choice
@@ -1150,6 +1150,15 @@ async def elective_options(
                 "credits": subject.credits,
                 "theory_hours": subject.theory_hours,
                 "lab_hours": subject.lab_hours,
+                "capacity": row["capacity"],
+                "seats_taken": row["seats_taken"],
+                # None where unlimited — a number here is a real countdown, so a
+                # student can see a group filling up before they commit to it.
+                "seats_left": (
+                    None
+                    if row["capacity"] is None
+                    else max(0, cast(int, row["capacity"]) - cast(int, row["seats_taken"]))
+                ),
                 "chosen": group in chosen and chosen[group].offering_id == row["id"],
             }
         )
@@ -1194,9 +1203,14 @@ async def choose_elective(
     existing = await dao.elective_choice_for_group(
         session, profile.user_id, term_code, str(subject.elective_group)
     )
+    if existing is not None and existing.offering_id == offering_id:
+        return existing
+
+    await org_service.claim_elective_seat(
+        session, offering_id, term_code, existing.offering_id if existing else None
+    )
+
     if existing is not None:
-        if existing.offering_id == offering_id:
-            return existing
         existing.offering_id = offering_id
         choice = existing
     else:

@@ -5,6 +5,7 @@ a room to sit in, and a faculty member to teach it.
 """
 
 import httpx
+import pytest
 
 from tests.onboarding.conftest import csv_bytes, student_row
 
@@ -484,3 +485,168 @@ async def test_a_core_subject_is_not_choosable(make_client, campus) -> None:
         )
     assert denied.status_code == 422
     assert "core subject" in denied.json()["detail"]
+
+
+# --- elective capacity (TTM-FR-14) -------------------------------------------
+
+
+async def _student(admin: httpx.AsyncClient, n: int) -> None:
+    await admin.post(
+        "/onboarding/imports",
+        data={"term_code": "2026-S1"},
+        files={"file": ("i.csv", csv_bytes([student_row(n)]), "text/csv")},
+    )
+
+
+def _username(n: int) -> str:
+    return f"r{n:04d}"
+
+
+async def test_full_elective_is_refused(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+        capped = await admin.put(
+            f"/org/offerings/{offerings['CS501']}", json={"capacity": 1}
+        )
+        assert capped.status_code == 200, capped.text
+        for n in (1, 2):
+            await _student(admin, n)
+
+    async with make_client("student", user_id=_username(1)) as first:
+        taken = await first.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS501"], "term_code": "2026-S1"},
+        )
+        assert taken.status_code == 201, taken.text
+
+    async with make_client("student", user_id=_username(2)) as second:
+        refused = await second.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS501"], "term_code": "2026-S1"},
+        )
+        # The alternative in the same group is still open.
+        alternative = await second.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS502"], "term_code": "2026-S1"},
+        )
+    assert refused.status_code == 409
+    assert "full (1 seats)" in refused.json()["detail"]
+    assert alternative.status_code == 201
+
+
+async def test_seats_left_counts_down_for_the_student(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+        await admin.put(f"/org/offerings/{offerings['CS501']}", json={"capacity": 2})
+        for n in (1, 2):
+            await _student(admin, n)
+
+    async with make_client("student", user_id=_username(1)) as first:
+        await first.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS501"], "term_code": "2026-S1"},
+        )
+
+    async with make_client("student", user_id=_username(2)) as second:
+        groups = (
+            await second.get("/onboarding/me/electives", params={"term_code": "2026-S1"})
+        ).json()
+    options = {
+        o["subject_code"]: o
+        for g in groups
+        for o in g["options"]
+    }
+    assert (options["CS501"]["capacity"], options["CS501"]["seats_taken"]) == (2, 1)
+    assert options["CS501"]["seats_left"] == 1
+    assert options["CS502"]["seats_left"] is None, "no capacity means unlimited"
+
+
+async def test_switching_within_a_full_group_frees_the_old_seat(make_client, campus) -> None:
+    """A student moving off a full elective must not be blocked by their own
+    occupancy of it — the seat they release is discounted."""
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+        await admin.put(f"/org/offerings/{offerings['CS502']}", json={"capacity": 1})
+        await _student(admin, 1)
+
+    async with make_client("student", user_id=_username(1)) as student:
+        await student.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS502"], "term_code": "2026-S1"},
+        )
+        # Move away and back: the second move must find its own seat free.
+        away = await student.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS501"], "term_code": "2026-S1"},
+        )
+        back = await student.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["CS502"], "term_code": "2026-S1"},
+        )
+    assert away.status_code == 201
+    assert back.status_code == 201, back.text
+
+
+async def test_capacity_cannot_drop_below_students_already_enrolled(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+        for n in (1, 2):
+            await _student(admin, n)
+
+    for n in (1, 2):
+        async with make_client("student", user_id=_username(n)) as student:
+            await student.post(
+                "/onboarding/me/electives",
+                json={"offering_id": offerings["CS501"], "term_code": "2026-S1"},
+            )
+
+    async with make_client("super-admin") as admin:
+        refused = await admin.put(
+            f"/org/offerings/{offerings['CS501']}",
+            params={"term_code": "2026-S1"},
+            json={"capacity": 1},
+        )
+        allowed = await admin.put(
+            f"/org/offerings/{offerings['CS501']}",
+            params={"term_code": "2026-S1"},
+            json={"capacity": 2},
+        )
+    assert refused.status_code == 409
+    assert "2 students have already chosen" in refused.json()["detail"]
+    assert allowed.status_code == 200
+
+
+async def test_offering_row_lock_serialises_concurrent_seat_claims(
+    make_client, campus
+) -> None:
+    """The mechanism capacity enforcement rests on.
+
+    Driving this through HTTP, or even through two concurrent `choose_elective`
+    calls, proves nothing: the first request happens to commit before the second
+    counts, so the assertion passes even with the lock removed. Asserting the
+    *lock* is what actually fails when `with_for_update()` goes away — a second
+    session must block while the first holds the row, and proceed once it
+    commits.
+    """
+    import asyncio
+    import uuid as uuid_mod
+
+    from unicore.core.db import get_sessionmaker
+    from unicore.modules.org import dao as org_dao
+
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+    offering_id = uuid_mod.UUID(offerings["CS501"])
+
+    maker = get_sessionmaker()
+    async with maker() as first, maker() as second:
+        assert await org_dao.lock_offering(first, offering_id) is not None
+
+        # Second session must not get the row while the first holds it.
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(org_dao.lock_offering(second, offering_id), timeout=0.75)
+
+        await first.commit()
+        await second.rollback()  # the cancelled statement left the tx unusable
+        assert await org_dao.lock_offering(second, offering_id) is not None
+        await second.commit()

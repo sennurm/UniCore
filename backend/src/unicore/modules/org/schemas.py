@@ -320,6 +320,12 @@ class OfferingCreate(BaseModel):
     subject_id: uuid.UUID
     program_id: uuid.UUID
     position: int = Field(ge=1, le=12)
+    # Electives only: how many students may choose it. None = unlimited.
+    capacity: int | None = Field(default=None, ge=1, le=2000)
+
+
+class OfferingUpdate(BaseModel):
+    capacity: int | None = Field(default=None, ge=1, le=2000)
 
 
 class OfferingOut(BaseModel):
@@ -327,6 +333,8 @@ class OfferingOut(BaseModel):
     subject_id: uuid.UUID
     program_id: uuid.UUID
     position: int
+    capacity: int | None
+    seats_taken: int = 0
     status: str
     subject: SubjectOut
 

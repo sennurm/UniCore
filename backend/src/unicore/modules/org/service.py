@@ -913,7 +913,7 @@ async def update_subject(
 
 async def create_offering(
     session: AsyncSession, ctx: AuthContext, subject_id: uuid.UUID, program_id: uuid.UUID,
-    position: int,
+    position: int, capacity: int | None = None,
 ) -> SubjectOffering:
     """Place a subject at (Programme, position). Idempotent — re-offering the
     same subject at the same position returns the existing row."""
@@ -939,7 +939,7 @@ async def create_offering(
         return existing
 
     offering = SubjectOffering(
-        subject_id=subject_id, program_id=program_id, position=position
+        subject_id=subject_id, program_id=program_id, position=position, capacity=capacity
     )
     session.add(offering)
     await session.flush()
@@ -961,20 +961,93 @@ async def list_offerings(
     program_id: uuid.UUID,
     position: int | None = None,
     kind: str | None = None,
+    term_code: str | None = None,
 ) -> list[dict[str, object]]:
-    """A Programme's curriculum: offerings paired with their subject."""
+    """A Programme's curriculum: offerings paired with their subject.
+
+    `term_code` adds the seats taken this term, which is what makes a capacity
+    meaningful to whoever is looking at it.
+    """
     rows = await dao.list_offerings(session, program_id, position, kind)
+    taken: dict[uuid.UUID, int] = {}
+    if term_code:
+        taken = await dao.count_offering_takers(
+            session, [offering.id for offering, _ in rows], term_code
+        )
     return [
         {
             "id": offering.id,
             "subject_id": offering.subject_id,
             "program_id": offering.program_id,
             "position": offering.position,
+            "capacity": offering.capacity,
+            "seats_taken": taken.get(offering.id, 0),
             "status": offering.status,
             "subject": subject,
         }
         for offering, subject in rows
     ]
+
+
+async def set_offering_capacity(
+    session: AsyncSession, ctx: AuthContext, offering_id: uuid.UUID, capacity: int | None,
+    term_code: str | None = None,
+) -> SubjectOffering:
+    """Set (or clear) the seat limit. Refuses to drop it below the students who
+    have already chosen — that would leave the offering over-subscribed with no
+    honest way to decide whose place to withdraw."""
+    offering = await get_offering(session, offering_id)
+    if capacity is not None and term_code:
+        taken = (
+            await dao.count_offering_takers(session, [offering_id], term_code)
+        ).get(offering_id, 0)
+        if capacity < taken:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{taken} students have already chosen this elective for "
+                f"{term_code}; capacity cannot be set below that.",
+            )
+    before = offering.capacity
+    offering.capacity = capacity
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.offering.capacity-set",
+        object_type="subject_offering",
+        object_id=str(offering.id),
+        before={"capacity": before},
+        after={"capacity": capacity},
+    )
+    await session.commit()
+    return offering
+
+
+async def claim_elective_seat(
+    session: AsyncSession, offering_id: uuid.UUID, term_code: str, releasing: uuid.UUID | None
+) -> None:
+    """Reserve a seat on an offering, or raise if it is full.
+
+    Locks the offering row first: capacity cannot be enforced by counting and
+    then inserting, because two students taking the last seat concurrently
+    would both read one free and both commit. `releasing` is the offering the
+    student is switching away from — their old seat is discounted so a swap
+    inside a full group is not blocked by their own occupancy.
+    """
+    offering = await dao.lock_offering(session, offering_id)
+    if offering is None:
+        raise HTTPException(status_code=404, detail="Subject offering not found.")
+    if offering.capacity is None:
+        return
+    taken = (await dao.count_offering_takers(session, [offering_id], term_code)).get(
+        offering_id, 0
+    )
+    if releasing == offering_id:
+        taken -= 1
+    if taken >= offering.capacity:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This elective is full ({offering.capacity} seats). Choose another.",
+        )
 
 
 async def get_offering(session: AsyncSession, offering_id: uuid.UUID) -> SubjectOffering:

@@ -330,6 +330,9 @@ class ElectiveOptionOut(BaseModel):
     credits: int
     theory_hours: int
     lab_hours: int
+    capacity: int | None
+    seats_taken: int
+    seats_left: int | None  # None when the offering is unlimited
     chosen: bool
 
 

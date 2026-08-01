@@ -15,6 +15,7 @@ from unicore.modules.org import service
 from unicore.modules.org.schemas import (
     OfferingCreate,
     OfferingOut,
+    OfferingUpdate,
     OrgImportResult,
     OrgUnitCreate,
     OrgUnitOut,
@@ -207,7 +208,7 @@ async def create_offering(
     ctx: AuthContext = Depends(require_permission("subject:write")),
 ) -> OfferingOut:
     offering = await service.create_offering(
-        session, ctx, payload.subject_id, payload.program_id, payload.position
+        session, ctx, payload.subject_id, payload.program_id, payload.position, payload.capacity
     )
     subject = await service.get_subject(session, offering.subject_id)
     return OfferingOut.model_validate(
@@ -216,6 +217,8 @@ async def create_offering(
             "subject_id": offering.subject_id,
             "program_id": offering.program_id,
             "position": offering.position,
+            "capacity": offering.capacity,
+            "seats_taken": 0,
             "status": offering.status,
             "subject": subject,
         }
@@ -227,12 +230,45 @@ async def list_offerings(
     program_id: uuid.UUID,
     position: int | None = None,
     kind: str | None = None,
+    term_code: str | None = None,
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("subject:read")),
 ) -> list[OfferingOut]:
-    """A Programme's curriculum — what is taught, and at which position."""
-    rows = await service.list_offerings(session, program_id, position, kind)
+    """A Programme's curriculum. Pass `term_code` to include seats taken."""
+    rows = await service.list_offerings(session, program_id, position, kind, term_code)
     return [OfferingOut.model_validate(row) for row in rows]
+
+
+@router.put("/offerings/{offering_id}", response_model=OfferingOut)
+async def set_offering_capacity(
+    offering_id: uuid.UUID,
+    payload: OfferingUpdate,
+    term_code: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:write")),
+) -> OfferingOut:
+    """Set or clear an elective's seat limit (TTM-FR-14). With `term_code` the
+    change is refused if it would fall below the students already enrolled."""
+    offering = await service.set_offering_capacity(
+        session, ctx, offering_id, payload.capacity, term_code
+    )
+    subject = await service.get_subject(session, offering.subject_id)
+    taken = await service.list_offerings(
+        session, offering.program_id, offering.position, term_code=term_code
+    )
+    seats = next((r["seats_taken"] for r in taken if r["id"] == offering.id), 0)
+    return OfferingOut.model_validate(
+        {
+            "id": offering.id,
+            "subject_id": offering.subject_id,
+            "program_id": offering.program_id,
+            "position": offering.position,
+            "capacity": offering.capacity,
+            "seats_taken": seats,
+            "status": offering.status,
+            "subject": subject,
+        }
+    )
 
 
 @router.post("/venues", response_model=VenueOut, status_code=201)

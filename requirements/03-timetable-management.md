@@ -25,7 +25,7 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 - Constraint-based auto-generation (future phase). The data model must keep constraints (faculty availability, venue attributes, lab-group/elective-group structures) as first-class data so a solver can be added without remodeling — but no solver ships in MVP.
 - Decentralized timetable authoring by Departments (MVP is central Timetable Cell only).
 - Room booking for non-teaching events (seminars, meetings) — out of scope.
-- ~~Student self-selection of electives~~ — **reversed 31-07-2026.** Students now choose their own elective: each elective offering belongs to one of three groups (General, Professional, Open), and a student picks exactly one subject per group per term, enforced by a database constraint so a double-submit cannot enrol them in two alternatives. Department admin staff retain elective-group *capacity* management (TTM-FR-14); capacity limits on student choice are not yet enforced and remain open.
+- ~~Student self-selection of electives~~ — **reversed 31-07-2026.** Students now choose their own elective: each elective offering belongs to one of three groups (General, Professional, Open), and a student picks exactly one subject per group per term, enforced by a database constraint so a double-submit cannot enrol them in two alternatives. **Capacity is enforced** (TTM-FR-14): each elective offering carries an optional seat limit — NULL means unlimited — and a full offering refuses further choices, naming the limit and leaving the alternatives in the group open. Students see seats remaining before they commit. The seat claim takes a **row lock on the offering** rather than counting and then inserting: two students taking the last seat concurrently would otherwise both read one free and both commit. A student switching *away* from a full offering is not blocked by their own occupancy of it, and capacity cannot be lowered below the students already enrolled — that would leave the offering over-subscribed with no honest way to decide whose place to withdraw.
 - Attendance capture itself — see 04-attendance-capture.md; this module only feeds it the published schedule.
 
 ## 3. Affected User Groups & Access
@@ -64,7 +64,7 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 | Assign substitute for a Period occurrence | HoD (own Department) or Timetable Cell (own campus) | API |
 | Confirm a rebalancing suggestion | HoD (own Department); Timetable Cell as fallback | API |
 | Propose / accept / cancel a class swap | The two Faculty Members assigned to the occurrences being exchanged (own Periods only); HoD(s) auto-notified | API + service layer (both-ways clash check) |
-| Create elective groups, set capacity | Department admin staff (own Department) | API |
+| Set an elective offering's seat capacity | HoD / School Incharge / admins (`subject:write`), per Department | API + service layer (row-locked seat claim) |
 | Assign/remove student in elective group | Department admin staff (own Department), within capacity | API |
 | View published timetable | Any authenticated user within org scope (students/faculty: own; HoD/exec: their units) | API |
 | View draft | Timetable Cell + approving HoDs only | API |

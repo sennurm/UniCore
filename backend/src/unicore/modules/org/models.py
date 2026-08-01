@@ -202,6 +202,9 @@ class SubjectOffering(Base):
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id"), nullable=False)
     program_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Seats available when students choose this elective (TTM-FR-14). NULL is
+    # unlimited — a limit is an explicit decision, never a default.
+    capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(
         Enum("active", "deactivated", name="org_unit_status", create_type=False),
         nullable=False,
