@@ -1,6 +1,6 @@
 # Requirement: Syllabus Coverage Tracking
 
-Module code: SYL · Status: DRAFT — pending approval · Last updated: 2026-07-21
+Module code: SYL · Status: DRAFT — pending approval · Last updated: 2026-07-30
 
 ## 1. Summary
 
@@ -136,7 +136,7 @@ Plan approvals/revisions, log edits, certification, re-opening, and threshold ch
 
 - Log entry save: < 1 s (p95); logging UI usable on mobile in ≤ 3 taps for a single-topic Session.
 - Dashboard load: offering view < 2 s (p95); Department roll-up (≤ 100 offerings) < 3 s (p95); School roll-up < 5 s (p95).
-- Lag evaluation: daily batch across all offerings (~3,000–5,000 per term) completes in ≤ 15 minutes; alerts delivered within 15 minutes of evaluation.
+- Lag evaluation: a daily sweep across all offerings (~3,000–5,000 per term) completes in ≤ 15 minutes; alerts delivered within 15 minutes of evaluation.
 - Scale: ~5,000 offerings × ~60 Sessions/term ≈ 300k logs/term; queries stated above hold at this volume.
 - Availability: 99.5% during academic hours (baseline); logging must queue offline on the mobile app and sync when connectivity returns (log timestamp = creation time, not sync time).
 - Retention: automatic purge at 3 years (configurable upward) with certification records exempted while referenced by filings.

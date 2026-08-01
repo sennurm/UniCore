@@ -1,6 +1,6 @@
 # UniCore — System Overview & Cross-Cutting Requirements
 
-Status: DRAFT — pending approval · Last updated: 2026-07-21
+Status: DRAFT — pending approval · Last updated: 2026-07-30
 
 ## 1. What UniCore is
 
@@ -13,19 +13,22 @@ Admissions, fee collection, and examinations conduct/valuation are **out of scop
 ```
 University
 └── Faculty Division (7 today: FET, FMC, FHSS, FSC*, FMS, FHS, Agri)
-    └── School                                        [multiple]
-        └── Department                                [multiple]
-            └── Program (semester-based OR year-based) [multiple]
-                └── Section (class group of students)
+    └── School  (declares curriculum cadence: semester OR yearly) [multiple]
+        └── Department                                            [multiple]
+            └── Program (inherits the School's cadence; may override) [multiple]
+                └── Section (per-term class group, sized by class-size cap)
 ```
 
 - The university operates **multiple campuses**; campus is an organizational dimension on Schools/Departments/venues/users.
 - **Source of truth for roles & access:** the university's role hierarchy and module-access matrix is [`sources/module_access_matrix.xlsx`](sources/module_access_matrix.xlsx) (received 25-07-2026; \*"FSC" carries a "confirm" note in the sheet, and the Agri Division's label needs correction — both flagged in AUTH open questions).
-- **Each School decides** whether its programs run on semesters or years, and each School owns its own promotion workflow.
+- **Curriculum cadence sits on the School** (locked 30-07-2026). Every School declares `semester` or `yearly` **at creation** — it is mandatory, not inferred — and every Programme beneath it inherits that value. A Programme **may override** it, because real Schools mix cadences: the School of Pharmacy runs B.Pharm and M.Pharm alongside PhD programmes that follow no term ladder at all. Cadence decides how many positions a Programme has (`duration_years × 2` for semester, `duration_years` for yearly), what a term advance means, and how Sections are named. This supersedes the earlier statement that cadence was a Programme attribute; the School is authoritative and the Programme is the exception.
+- Each School owns its own promotion workflow.
 - All data visibility and administrative authority is scoped by org unit (campus / Faculty Division / School / Department / Program / Section).
 - **Exactly one University** exists (locked 28-07-2026): the root is created by bootstrap and a second university row is refused. Campuses remain a dimension on units below it, not a second root.
-- **Org-unit lifecycle:** Faculty Divisions, Schools, Departments, and Programs are created/renamed/deactivated (never deleted) by the University Super Admin, fully audited (see AUTH doc). Bulk maintenance uses a **flat course-catalogue import** — one row per Programme carrying its Faculty Division, School and Department as columns, with missing ancestors created automatically. **Department is optional**: most Schools have none, so blank department columns synthesise a default Department mirroring the School, flagged `auto_created` (locked 28-07-2026 against the university structure document). Programmes carry level (UG/PG/PhD/Diploma), duration in academic years, mode (Full-Time/Part-Time), category (Standard / Industry Collaborated / Industry Integrated / Research), industry partner, internship months, and lateral-entry semester. A **Section is a per-term instance** — (Program, term, label), with labels like "3B" reusable across terms — created by the **Timetable Cell during term setup** (see TTM doc); ONB section allotment and TTM draft authoring depend on the term's Section instances existing first. Term-closure archives a Section instance; a PRM rollback un-archives the old instance without colliding with the new term's Sections.
+- **Org-unit lifecycle:** Faculty Divisions, Schools, Departments, and Programs are created/renamed/deactivated (never deleted) by the University Super Admin, fully audited (see AUTH doc). Bulk maintenance uses a **flat course-catalogue import** — one row per Programme carrying its Faculty Division, School and Department as columns, with missing ancestors created automatically. **Department is optional**: most Schools have none, so blank department columns synthesise a default Department mirroring the School, flagged `auto_created` (locked 28-07-2026 against the university structure document). Programmes carry level (UG/PG/PhD/Diploma), duration in academic years, mode (Full-Time/Part-Time), category (Standard / Industry Collaborated / Industry Integrated / Research), industry partner, internship months, and lateral-entry semester. A **Section is a per-term instance** — (Program, term, position, division letter) — created by the **Timetable Cell during term setup** (see TTM doc); ONB section allotment and TTM draft authoring depend on the term's Section instances existing first. Sections are **generated, not typed**: the Timetable Cell triggers generation for a term and the system walks each Programme's live positions, dividing the expected headcount by the School's class-size cap to decide how many parallel Sections that position needs — so B.Tech AI & Data Science semester II with 90 students and a cap of 60 yields "II Semester - A" and "II Semester - B". Labels render from a configurable template and repeat across terms; the Timetable Cell may add further Sections by hand at any time. Term-closure archives a Section instance; a PRM rollback un-archives the old instance without colliding with the new term's Sections.
 - **School academic calendar:** before each semester/year, every School uploads its term calendar — start/end dates, exam-date ranges, special-event dates, and the term-archival backstop date. School office staff upload; the School Incharge's approval is recorded before it becomes active; amendments are versioned and re-approved. Campus holidays/working days remain a separate System Admin-maintained campus calendar. Exam and special-event dates drive **soft warnings and cross-references only** in MVP (TTM scheduling warnings, TSK exam-duty conflict signal, LVE On-Duty overlap display) — never hard blocks.
+- **One calendar, many Schools (locked 30-07-2026):** a university-level actor may apply one set of term dates to **several Schools at once**. The upload **fans out into a separate draft calendar per School** — never one shared record — so each School Incharge still approves their own and may amend the dates before doing so. This is deliberate: a shared record would let one School's approval bind another School's term, and calendar approval is a School-scoped power the School Incharge holds alone. Schools already holding an approved calendar for that term code receive a new draft **version** (the existing amend-and-supersede path), never a silent overwrite.
+- **Term parity:** a term is odd or even. A semester-cadence Programme runs only its **odd positions in an odd term** (1, 3, 5, 7) and its even positions in an even term — a 4-year B.Tech therefore needs four Sections' worth of ladder per term, not eight. Yearly-cadence Programmes run every position each term. Parity is declared on the term and drives Section generation.
 
 ## 3. Terminology
 
@@ -36,6 +39,11 @@ University
 | SIF id | Student identifier issued when admission completes — present from day one, so it is the **import join key** |
 | Enrollment No | The student's **canonical identifier**, issued after admission; unique university-wide, leads in rosters/exports, one-to-one with the SIF id |
 | Section | A class group of students within a program term |
+| **Batch** | The **admission cohort** of a Programme — (Programme × joining year), e.g. `BT-CSE-2026`. The unit that moves through the curriculum together and graduates together. Reserved: see the note below |
+| **Lab group** | A partition of a Section for lab blocks (B1/B2), each with its own Faculty Member and venue. Formerly called a "lab batch" |
+| **Import run** | One execution of a CSV import — its file, row counts and error report. Formerly called an "import batch" |
+| Position | A student's place in the curriculum ladder: semester *n* for semester cadence, year *n* for yearly. The authoritative number; the other is derived |
+| Class-size cap | Maximum students per Section, used to decide how many parallel Sections a position needs |
 | Class In-charge | Faculty Member designated as owner of a Section |
 | Period | One timetabled teaching slot |
 | Session | One delivered instance of a Period (carries attendance + syllabus log) |
@@ -47,6 +55,15 @@ University
 | Controller of Examination (CoE) | Exam Cell lead, reports to the Registrar |
 | Principal | A **School-level** title (School of Pharmacy, School of Nursing) documented as "equal to school incharge" — a display alias for a School Incharge grant, **not** a campus head |
 | Teaching grades | Professor, Associate Professor, Assistant Professor, Tutor, Assistant Teaching Staff — all "Faculty Member" tier (Tutors/ATS cannot author question-bank entries) |
+
+> **"Batch" is a reserved word (locked 30-07-2026).** It means the admission
+> cohort and nothing else — in documents, API, database and UI alike. The word
+> previously carried three unrelated meanings across these documents: the
+> admission cohort, a lab partition of a Section (TTM), and a CSV import run
+> (ONB). Three meanings of one word inside one clash-detection engine is a defect
+> waiting to be written, so the other two were renamed to **lab group** and
+> **import run**. Any surviving use of "batch" for those senses is a stale
+> document, not an alternative spelling.
 
 ## 4. User groups
 

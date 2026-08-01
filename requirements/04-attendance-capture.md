@@ -1,6 +1,6 @@
 # Requirement: Attendance Capture (QR)
 
-Module code: ATT · Status: DRAFT — pending approval · Last updated: 2026-07-21
+Module code: ATT · Status: DRAFT — pending approval · Last updated: 2026-07-30
 
 ## 1. Summary
 
@@ -11,7 +11,7 @@ Attendance in UniCore is captured per **Session** — one delivered instance of 
 **Goals**
 - Fraud-resistant, low-friction attendance marking inside the first minutes of a Period.
 - A clear Session lifecycle: open → scanning → count verification → close → locked.
-- Correct rosters for every timetable shape: plain Sections, combined classes, lab batches, elective groups.
+- Correct rosters for every timetable shape: plain Sections, combined classes, lab groups, elective groups.
 - DPDP-compliant proximity checking: consent-gated, pass/fail only, no location traces.
 - Disciplined corrections (Class In-charge only, reasoned, audited) and a student dispute path.
 - Attendance-percentage computation (per subject and aggregate) as the input to promotion eligibility.
@@ -126,7 +126,7 @@ Every Session open/close, pending-scan resolution, manual mark, correction, and 
 - ATT-FR-07: Count verification screen: scanned vs expected roster count, list of pending-verification scans; close blocked until every pending is explicitly accepted/rejected and the count is confirmed.
 - ATT-FR-08: Manual marking during verification: Faculty Member may set `present` or `late` for unscanned students; School-configurable grace window governs the late boundary.
 - ATT-FR-09: On close, all roster members resolve to `present`/`late`/`absent`; records lock; late counts toward presence unless the School configures otherwise.
-- ATT-FR-10: Roster resolution per timetable shape: plain Section → Section roster; combined class → union of all constituent Sections' rosters under one Session; lab Period → the scheduled batch only; elective Period → the elective group (cross-Section), all sourced from TTM.
+- ATT-FR-10: Roster resolution per timetable shape: plain Section → Section roster; combined class → union of all constituent Sections' rosters under one Session; lab Period → the scheduled lab group only; elective Period → the elective group (cross-Section), all sourced from TTM.
 - ATT-FR-11: Post-lock corrections by the Section's Class In-charge only, with mandatory reason and before/after audit; correction window ends at the Program's attendance freeze (PRM-FR-17); post-freeze corrections only via an open dispute/grievance for non-ratified students (business rule 10).
 - ATT-FR-12: Never-opened Period detection: after Period end + grace, flag to HoD; attendance state `not-captured`; excluded from percentage numerator and denominator until resolved (retro-capture by Class In-charge correction flow or HoD-acknowledged write-off). **Retro-capture closes at the attendance freeze (PRM-FR-17); post-freeze the only resolution is the HoD-acknowledged write-off.** The flag also fires the urgent TTM rebalancing suggestion flow (TTM-FR-16) so remaining same-day Periods of the absent Faculty Member get covered.
 - ATT-FR-13: Percentage computation per student: per-subject and aggregate, over captured Sessions only; recomputed on every capture/correction; exposed via read API to PRM with the School-configured threshold (default 75%).
@@ -151,7 +151,7 @@ Every Session open/close, pending-scan resolution, manual mark, correction, and 
 | Late arrival after scanning ends | **DECISION:** Faculty Member marks `late` (within School grace window) or `present` at their discretion during verification; after close it becomes a Class In-charge correction. |
 | Student marked absent disputes it | **DECISION:** dispute goes to the Class In-charge (US-ATT-6); accept → audited correction; reject → reasoned rejection visible to the student; unresolved → AUTH grievance flow. |
 | Combined class (multiple Sections, one venue + Faculty Member) | **DECISION:** ONE Session whose roster is the union of all constituent Sections; percentages attribute the Session to each student's own subject enrolment; corrections route to each student's own Class In-charge. |
-| Lab Period with batches | **DECISION:** Session roster = the scheduled batch only, per TTM batch data; students of the other batch are neither expected nor markable. |
+| Lab Period with lab groups | **DECISION:** Session roster = the scheduled lab group only, per TTM lab-group data; students of the other group are neither expected nor markable. |
 | Elective Period | **DECISION:** roster = the elective group (students converging from many Sections); disputes/corrections still route to each student's home-Section Class In-charge. |
 | Substitute takes the class | **DECISION:** only an **officially assigned substitute per TTM** can open the Session; ad-hoc stand-ins must first be recorded in TTM. No verbal-arrangement bypass. |
 | Committed class swap (TTM-FR-17) | **DECISION:** the swapped-in teacher holds the session-open right for the swapped occurrence exactly like a substitute; the original assignee is denied for that occurrence (and vice versa on the reciprocal occurrence). Attribution in ATT/SYL follows the swap. |
@@ -176,7 +176,7 @@ Every Session open/close, pending-scan resolution, manual mark, correction, and 
 ## 10. Assumptions
 
 - **Interpretation assumption:** the stakeholder phrased the correction requirement as "update the captured time table with valid reason"; this is interpreted as **attendance-record corrections** (Class In-charge, mandatory reason, audited) — not timetable edits, which belong to TTM. Flagged for confirmation at approval.
-- TTM provides, via API: published timetables, Period-to-Faculty-Member assignment, official substitute assignments, combined-class/batch/elective rosters.
+- TTM provides, via API: published timetables, Period-to-Faculty-Member assignment, official substitute assignments, combined-class/lab-group/elective rosters.
 - Campus Wi-Fi infrastructure can attest "on-campus" presence (e.g., request arrives via campus network egress) reliably enough for a pass/fail signal.
 - Venue geofence polygons/radii are maintained as master data (by the Timetable Cell or IT cell).
 - Every registered device has a working camera; students without a usable device at class time — or without any device, indefinitely (ATT-FR-18) — are covered by faculty manual marking.
@@ -244,7 +244,7 @@ flowchart TD
 | TC-ATT-015 | Non-Class-In-charge (incl. HoD) cannot correct | Access | P0 | Closed Session; actor = HoD | Attempt correction | 403; audited | §4 matrix |
 | TC-ATT-016 | Never-opened Period flagged, excluded from denominator | Happy | P0 | Period ended, no Session | Run flagging job; compute percentage | HoD flag raised; Session absent from numerator and denominator | ATT-FR-12/13, US-ATT-7 |
 | TC-ATT-017 | Combined-class Session covers union roster | Happy | P1 | Combined Period for Sections A+B | Open Session; students of both scan | All accepted; percentages attributed per student's enrolment | ATT-FR-10 |
-| TC-ATT-018 | Lab batch roster excludes other batch | Boundary | P1 | Lab Period, Batch 1 scheduled | Batch 2 student scans | Rejected: not on Session roster | ATT-FR-10 |
+| TC-ATT-018 | Lab group roster excludes the other group | Boundary | P1 | Lab Period, lab group 1 scheduled | Lab group 2 student scans | Rejected: not on Session roster | ATT-FR-10 |
 | TC-ATT-019 | Network failure: no offline queue, manual fallback | Negative | P1 | Student device loses network mid-scan | Scan fails; faculty marks student during verification | No queued scan ever submitted; manual mark recorded | ATT-FR-05/08, §8 |
 | TC-ATT-020 | 75% threshold configurable per School | Legal | P1 | School A = 75%, School B = 80% | Compute eligibility inputs via PRM API | Each School's threshold applied; nothing hardcoded | §5, ATT-FR-13/15 |
 | TC-ATT-021 | Sustained 50 scans/sec with p95 < 2 s | NFR | P0 | Load environment, burst profile | Drive ≥50 validations/sec for 10 min | No errors; p95 scan-to-confirmation < 2 s | §9 |
