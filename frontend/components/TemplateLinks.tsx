@@ -15,11 +15,17 @@ export default function TemplateLinks({ only }: { only?: string[] }) {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [error, setError] = useState("");
 
+  // Callers pass an array literal, which is a new reference on every render —
+  // depending on it directly re-fetches /templates in a loop. Depend on the
+  // contents instead.
+  const keys = only?.join(",");
+
   useEffect(() => {
+    const wanted = keys ? keys.split(",") : null;
     api<Template[]>("/templates")
-      .then((all) => setTemplates(only ? all.filter((t) => only.includes(t.key)) : all))
+      .then((all) => setTemplates(wanted ? all.filter((t) => wanted.includes(t.key)) : all))
       .catch(() => undefined);
-  }, [only]);
+  }, [keys]);
 
   if (templates.length === 0) return null;
 

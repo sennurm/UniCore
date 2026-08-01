@@ -23,23 +23,24 @@ type RoleImportResult = {
   errors: { row_number: number; username: string; reason: string }[];
 };
 
-const ROLES = [
-  "system-admin", "chancellor", "pro-chancellor", "vc", "registrar",
-  "dean-academic-affairs",
-  "faculty-dean", "school-incharge", "hod", "class-incharge", "office-staff",
-  "professor", "associate-professor", "assistant-professor", "tutor",
-  "assistant-teaching-staff", "timetable-cell", "exam-cell",
-  "controller-of-examination", "school-admin", "subject-coordinator",
-  "subject-author", "school-exam-coordinator", "hr-designate",
-];
+/** Fetched from the registry, never hardcoded — a literal list here had already
+ *  drifted (it omitted super-admin) and would silently miss every role added. */
+type Role = {
+  code: string;
+  name: string;
+  unit_type: string;
+  singleton: boolean;
+  term_bound: boolean;
+};
 
 export default function UsersAndRolesPage() {
+  const [roles, setRoles] = useState<Role[]>([]);
   const [rows, setRows] = useState<DirectoryRow[]>([]);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [grantFor, setGrantFor] = useState<DirectoryRow | null>(null);
-  const [grantForm, setGrantForm] = useState({ role_code: "hod", org_unit_id: "", term_code: "" });
+  const [grantForm, setGrantForm] = useState({ role_code: "", org_unit_id: "", term_code: "" });
   const [file, setFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<RoleImportResult | null>(null);
   const [creating, setCreating] = useState(false);
@@ -66,6 +67,12 @@ export default function UsersAndRolesPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    api<Role[]>("/rbac/roles")
+      .then(setRoles)
+      .catch((err) => setError(String((err as Error).message)));
+  }, []);
 
   async function provision(e: React.FormEvent) {
     e.preventDefault();
@@ -165,7 +172,7 @@ export default function UsersAndRolesPage() {
             <label>Role</label>
             <select className="input" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
               <option value="">All roles</option>
-              {ROLES.map((r) => <option key={r}>{r}</option>)}
+              {roles.map((r) => <option key={r.code} value={r.code}>{r.name} ({r.unit_type})</option>)}
             </select>
           </div>
           <div className="field" style={{ marginBottom: 0, maxWidth: 160 }}>
@@ -281,13 +288,22 @@ export default function UsersAndRolesPage() {
           <form onSubmit={issueGrant}>
             <div className="field">
               <label>Role</label>
-              <select className="input" value={grantForm.role_code}
+              <select className="input" value={grantForm.role_code} required
                 onChange={(e) => setGrantForm({ ...grantForm, role_code: e.target.value })}>
-                {ROLES.map((r) => <option key={r}>{r}</option>)}
+                <option value="">— select a role —</option>
+                {roles.map((r) => <option key={r.code} value={r.code}>{r.name} ({r.unit_type})</option>)}
               </select>
             </div>
             <div className="field">
-              <label>Org unit id (blank for university-scope roles)</label>
+              <label>
+                {(() => {
+                  const unit = roles.find((r) => r.code === grantForm.role_code)?.unit_type;
+                  if (!unit) return "Org unit id";
+                  return unit === "university"
+                    ? "Org unit id — leave blank, this role is university-scoped"
+                    : `Org unit id — must be a ${unit.replace("_", " ")}`;
+                })()}
+              </label>
               <input className="input" value={grantForm.org_unit_id}
                 onChange={(e) => setGrantForm({ ...grantForm, org_unit_id: e.target.value })} />
             </div>
