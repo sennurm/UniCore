@@ -248,3 +248,92 @@ class EnrollmentImportResult(BaseModel):
     rows_unchanged: int
     rows_rejected: int
     errors: list[RowErrorOut]
+
+
+STAFF_CSV_COLUMNS = (
+    "employee_id",
+    "full_name",
+    "designation",
+    "department_code",
+    "mobile",
+    "email",
+    "date_of_joining",
+)
+
+register(
+    CsvTemplate(
+        key="staff",
+        title="Staff import",
+        description="Bulk staff provisioning, one row per employee.",
+        columns=STAFF_CSV_COLUMNS,
+        examples=(
+            {
+                "employee_id": "EMP-1041",
+                "full_name": "Dr. Suphalakshmi Anandan",
+                "designation": "Professor",
+                "department_code": "CSE",
+                "mobile": "9840012345",
+                "email": "suphalakshmi.a@takshashila.edu.in",
+                "date_of_joining": "01-06-2018",
+            },
+            {
+                "employee_id": "EMP-1042",
+                "full_name": "Dr. Murugamani P",
+                "designation": "HoD",
+                "department_code": "CSE",
+                "mobile": "9840012346",
+                "email": "murugamani.p@takshashila.edu.in",
+                "date_of_joining": "15-07-2015",
+            },
+            {
+                "employee_id": "EMP-2210",
+                "full_name": "Kavitha Ramesh",
+                "designation": "Office Staff",
+                "department_code": "CSE",
+                "mobile": "",
+                "email": "kavitha.r@takshashila.edu.in",
+                "date_of_joining": "",
+            },
+        ),
+        notes=(
+            "SAMPLE DATA — replace the rows below with your own before uploading.",
+            "employee_id is the key rows are matched on. Re-uploading is safe: an "
+            "existing employee is updated, never duplicated.",
+            "designation GRANTS THE ROLE at the named Department. Accepted values: "
+            "Professor, Associate Professor, Assistant Professor, Tutor, Assistant "
+            "Teaching Staff, HoD, Office Staff, Timetable Cell.",
+            "HoD is a singleton — one per Department. A row naming a second HoD for "
+            "a Department is rejected rather than silently double-heading it; use "
+            "the supersede flow on Users & roles to replace the holder.",
+            "department_code is the Department the person belongs to, and the scope "
+            "their role is granted at.",
+            "At least ONE of mobile/email is required — that is how initial "
+            "credentials reach them.",
+            "Dates are DD-MM-YYYY. date_of_joining is optional.",
+        ),
+    )
+)
+
+
+class ElectiveChoiceRequest(BaseModel):
+    offering_id: uuid.UUID
+    term_code: str = Field(min_length=1, max_length=50)
+
+
+class ElectiveOptionOut(BaseModel):
+    """One choosable subject within a group, for the student's own position."""
+
+    offering_id: uuid.UUID
+    subject_code: str
+    subject_name: str
+    elective_group: str
+    credits: int
+    theory_hours: int
+    lab_hours: int
+    chosen: bool
+
+
+class ElectiveGroupOut(BaseModel):
+    elective_group: str
+    chosen_offering_id: uuid.UUID | None
+    options: list[ElectiveOptionOut]

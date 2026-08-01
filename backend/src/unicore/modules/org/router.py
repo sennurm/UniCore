@@ -13,12 +13,20 @@ from unicore.core.db import get_session
 from unicore.core.security import AuthContext
 from unicore.modules.org import service
 from unicore.modules.org.schemas import (
+    OfferingCreate,
+    OfferingOut,
     OrgImportResult,
     OrgUnitCreate,
     OrgUnitOut,
     OrgUnitRename,
     OrgUnitReparent,
     OrgUnitUpdate,
+    SubjectCreate,
+    SubjectOut,
+    SubjectUpdate,
+    VenueCreate,
+    VenueOut,
+    VenueUpdate,
 )
 from unicore.modules.rbac.service import require_permission
 
@@ -138,3 +146,135 @@ async def list_children(
 ) -> list[OrgUnitOut]:
     children = await service.list_children(session, unit_id)
     return [OrgUnitOut.model_validate(c) for c in children]
+
+
+# --- subjects, offerings and venues ------------------------------------------
+
+
+@router.post("/subjects", response_model=SubjectOut, status_code=201)
+async def create_subject(
+    payload: SubjectCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:write")),
+) -> SubjectOut:
+    return SubjectOut.model_validate(await service.create_subject(session, ctx, payload))
+
+
+@router.get("/subjects", response_model=list[SubjectOut])
+async def list_subjects(
+    department_id: uuid.UUID | None = None,
+    kind: str | None = None,
+    search: str | None = None,
+    include_inactive: bool = False,
+    limit: int = Query(default=500, le=2000),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:read")),
+) -> list[SubjectOut]:
+    subjects = await service.list_subjects(
+        session, department_id, kind, search, include_inactive, limit
+    )
+    return [SubjectOut.model_validate(s) for s in subjects]
+
+
+@router.put("/subjects/{subject_id}", response_model=SubjectOut)
+async def update_subject(
+    subject_id: uuid.UUID,
+    payload: SubjectUpdate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:write")),
+) -> SubjectOut:
+    changes = payload.model_dump(exclude_unset=True)
+    return SubjectOut.model_validate(
+        await service.update_subject(session, ctx, subject_id, changes)
+    )
+
+
+@router.post("/subjects/imports")
+async def import_subjects(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:write")),
+) -> dict[str, object]:
+    """Bulk subject catalogue — one row per offering; partial commit."""
+    content = await file.read()
+    return await service.import_subjects(session, ctx, file.filename or "subjects.csv", content)
+
+
+@router.post("/offerings", response_model=OfferingOut, status_code=201)
+async def create_offering(
+    payload: OfferingCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:write")),
+) -> OfferingOut:
+    offering = await service.create_offering(
+        session, ctx, payload.subject_id, payload.program_id, payload.position
+    )
+    subject = await service.get_subject(session, offering.subject_id)
+    return OfferingOut.model_validate(
+        {
+            "id": offering.id,
+            "subject_id": offering.subject_id,
+            "program_id": offering.program_id,
+            "position": offering.position,
+            "status": offering.status,
+            "subject": subject,
+        }
+    )
+
+
+@router.get("/programmes/{program_id}/offerings", response_model=list[OfferingOut])
+async def list_offerings(
+    program_id: uuid.UUID,
+    position: int | None = None,
+    kind: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:read")),
+) -> list[OfferingOut]:
+    """A Programme's curriculum — what is taught, and at which position."""
+    rows = await service.list_offerings(session, program_id, position, kind)
+    return [OfferingOut.model_validate(row) for row in rows]
+
+
+@router.post("/venues", response_model=VenueOut, status_code=201)
+async def create_venue(
+    payload: VenueCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("venue:write")),
+) -> VenueOut:
+    return VenueOut.model_validate(
+        await service.create_venue(session, ctx, payload.model_dump())
+    )
+
+
+@router.get("/venues", response_model=list[VenueOut])
+async def list_venues(
+    kind: str | None = None,
+    search: str | None = None,
+    include_inactive: bool = False,
+    limit: int = Query(default=500, le=2000),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("venue:read")),
+) -> list[VenueOut]:
+    venues = await service.list_venues(session, kind, search, include_inactive, limit)
+    return [VenueOut.model_validate(v) for v in venues]
+
+
+@router.put("/venues/{venue_id}", response_model=VenueOut)
+async def update_venue(
+    venue_id: uuid.UUID,
+    payload: VenueUpdate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("venue:write")),
+) -> VenueOut:
+    changes = payload.model_dump(exclude_unset=True)
+    return VenueOut.model_validate(await service.update_venue(session, ctx, venue_id, changes))
+
+
+@router.post("/venues/imports")
+async def import_venues(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("venue:write")),
+) -> dict[str, object]:
+    content = await file.read()
+    return await service.import_venues(session, ctx, file.filename or "venues.csv", content)

@@ -12,6 +12,8 @@ from unicore.modules.onboarding.models import (
     ImportRowError,
     ImportRun,
     SectionMembership,
+    StaffProfile,
+    StudentElectiveChoice,
     StudentProfile,
 )
 
@@ -95,6 +97,15 @@ async def list_batches_for_programs(
     return result.scalars().all()
 
 
+async def get_staff_by_employee_id(
+    session: AsyncSession, employee_id: str
+) -> StaffProfile | None:
+    result = await session.execute(
+        select(StaffProfile).where(StaffProfile.employee_id == employee_id)
+    )
+    return result.scalar_one_or_none()
+
+
 async def roll_number_holder(
     session: AsyncSession, program_id: uuid.UUID, admission_year: int, roll_number: str
 ) -> StudentProfile | None:
@@ -174,3 +185,28 @@ async def memberships_for(
         .order_by(SectionMembership.effective_from)
     )
     return result.scalars().all()
+
+
+async def elective_choices_for(
+    session: AsyncSession, user_id: uuid.UUID, term_code: str
+) -> Sequence[StudentElectiveChoice]:
+    result = await session.execute(
+        select(StudentElectiveChoice).where(
+            StudentElectiveChoice.user_id == user_id,
+            StudentElectiveChoice.term_code == term_code,
+        )
+    )
+    return result.scalars().all()
+
+
+async def elective_choice_for_group(
+    session: AsyncSession, user_id: uuid.UUID, term_code: str, elective_group: str
+) -> StudentElectiveChoice | None:
+    result = await session.execute(
+        select(StudentElectiveChoice).where(
+            StudentElectiveChoice.user_id == user_id,
+            StudentElectiveChoice.term_code == term_code,
+            StudentElectiveChoice.elective_group == elective_group,
+        )
+    )
+    return result.scalar_one_or_none()

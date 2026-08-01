@@ -13,6 +13,7 @@ import io
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,11 +30,14 @@ from unicore.modules.onboarding.models import (
     ImportRowError,
     ImportRun,
     SectionMembership,
+    StaffProfile,
+    StudentElectiveChoice,
     StudentProfile,
 )
 from unicore.modules.onboarding.schemas import (
     CSV_COLUMNS_V1,
     ENROLLMENT_CSV_COLUMNS,
+    STAFF_CSV_COLUMNS,
     SingleStudentAdd,
 )
 from unicore.modules.org import service as org_service
@@ -932,3 +936,285 @@ async def import_enrollment_ids(
         "rows_rejected": len(errors),
         "errors": errors,
     }
+
+
+# --- staff import (mirrors the student pipeline) ------------------------------
+
+# A designation names the role the staff member holds at their Department.
+# Singleton roles (hod) still go through the normal grant rules, so a file
+# cannot quietly double-head a Department.
+DESIGNATION_ROLES: dict[str, str] = {
+    "professor": "professor",
+    "associate professor": "associate-professor",
+    "assistant professor": "assistant-professor",
+    "tutor": "tutor",
+    "assistant teaching staff": "assistant-teaching-staff",
+    "hod": "hod",
+    "head of department": "hod",
+    "office staff": "office-staff",
+    "timetable cell": "timetable-cell",
+}
+
+
+async def import_staff(
+    session: AsyncSession, ctx: AuthContext, filename: str, content: bytes
+) -> ImportRun:
+    """Bulk staff provisioning — same shape as the student import: partial
+    commit, per-row error report, idempotent upsert on employee id.
+
+    The designation column grants the matching role at the named Department, so
+    ~2,000 staff do not need their roles issued one screen at a time.
+    """
+    _pre_parse_gate(content)
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
+
+    reader = csv.DictReader(io.StringIO(strip_comments(text_content)))
+    missing = set(STAFF_CSV_COLUMNS) - {h.strip() for h in (reader.fieldnames or [])}
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Header does not match the staff template — missing: "
+            f"{', '.join(sorted(missing))}.",
+        )
+
+    run = ImportRun(
+        filename=filename,
+        file_hash=hashlib.sha256(content).hexdigest(),
+        term_code="-",  # staff are not term-scoped
+        uploaded_by=ctx.user_id,
+    )
+    session.add(run)
+    await session.flush()
+
+    seen: set[str] = set()
+    created = updated = unchanged = rejected = 0
+    with timed("staff import processed", **{"db.system.name": "postgresql"}):
+        for index, raw in enumerate(reader, start=2):
+            row = {k: (v or "").strip() for k, v in raw.items() if k}
+            try:
+                employee_id = _require(row, "employee_id")
+                if employee_id in seen:
+                    raise RowError("employee_id", "in-file duplicate — first occurrence wins")
+                seen.add(employee_id)
+                outcome = await _upsert_staff_row(session, ctx, row, employee_id)
+            except RowError as err:
+                rejected += 1
+                session.add(
+                    ImportRowError(
+                        run_id=run.id,
+                        row_number=index,
+                        field=err.field,
+                        reason=err.reason,
+                        raw_row=",".join(f"{k}={v}" for k, v in row.items()),
+                    )
+                )
+                continue
+            if outcome == "created":
+                created += 1
+            elif outcome == "updated":
+                updated += 1
+            else:
+                unchanged += 1
+
+    run.rows_total = created + updated + unchanged + rejected
+    run.rows_created, run.rows_updated = created, updated
+    run.rows_unchanged, run.rows_rejected = unchanged, rejected
+    run.status = "committed"
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="onb.staff-import.completed",
+        object_type="import_run",
+        object_id=str(run.id),
+        after={"created": created, "updated": updated, "rejected": rejected},
+    )
+    await session.commit()
+    return run
+
+
+async def _upsert_staff_row(
+    session: AsyncSession, ctx: AuthContext, row: dict[str, str], employee_id: str
+) -> str:
+    full_name = _require(row, "full_name")
+    designation = _require(row, "designation").lower()
+    role_code = DESIGNATION_ROLES.get(designation)
+    if role_code is None:
+        raise RowError(
+            "designation",
+            f"'{designation}' is not a known designation — one of: "
+            f"{', '.join(sorted(DESIGNATION_ROLES))}",
+        )
+    department_code = _require(row, "department_code")
+    departments = await org_service.resolve_by_code(session, department_code, "department", None)
+    if not departments:
+        raise RowError("department_code", f"unknown Department '{department_code}'")
+    department = departments[0]
+
+    mobile = row.get("mobile") or None
+    email = row.get("email") or None
+    if not mobile and not email:
+        raise RowError("mobile/email", "no contact channel — credentials cannot be delivered")
+
+    profile = await dao.get_staff_by_employee_id(session, employee_id)
+    if profile is None:
+        user = await user_service.provision_staff(
+            session,
+            ctx,
+            username=_username_for(employee_id, employee_id),
+            full_name=full_name,
+            email=email,
+            mobile=mobile,
+        )
+        session.add(
+            StaffProfile(
+                user_id=user.id,
+                employee_id=employee_id,
+                department_id=department.id,
+                designation=designation,
+                date_of_joining=_parse_date(row.get("date_of_joining", "")),
+            )
+        )
+        await session.flush()
+        await _grant_designation(session, ctx, user.id, role_code, department.id)
+        return "created"
+
+    user = await user_service.get_user(session, profile.user_id)
+    changed = False
+    if user.full_name != full_name:
+        user.full_name = full_name
+        changed = True
+    for attr, value in (("email", email), ("mobile", mobile)):
+        if value and getattr(user, attr) != value:
+            setattr(user, attr, value)
+            changed = True
+    if profile.designation != designation or profile.department_id != department.id:
+        profile.designation = designation
+        profile.department_id = department.id
+        changed = True
+    if await _grant_designation(session, ctx, user.id, role_code, department.id):
+        changed = True
+    await session.flush()
+    return "updated" if changed else "unchanged"
+
+
+async def _grant_designation(
+    session: AsyncSession, ctx: AuthContext, user_id: uuid.UUID, role_code: str,
+    department_id: uuid.UUID,
+) -> bool:
+    """Issue the designation's role, surfacing a singleton clash as a row error
+    rather than letting a file quietly double-head a Department."""
+    try:
+        return await rbac_service.ensure_sole_grant(
+            session, ctx, user_id, role_code, department_id, "designation changed on import"
+        )
+    except HTTPException as err:
+        raise RowError("designation", str(err.detail)) from None
+
+
+# --- student elective selection ----------------------------------------------
+
+
+async def elective_options(
+    session: AsyncSession, ctx: AuthContext, term_code: str
+) -> list[dict[str, object]]:
+    """The elective groups open to the caller this term, and what they picked.
+
+    Resolved from the AuthContext, never a client-supplied id (project rule):
+    a student sees their own Programme and position, and nobody else's.
+    """
+    profile = await dao.get_profile(session, uuid.UUID(ctx.user_id))
+    if profile is None:
+        raise HTTPException(status_code=404, detail="No student record for this account.")
+
+    offerings = await org_service.list_offerings(
+        session, profile.program_id, profile.position, kind="elective"
+    )
+    chosen = {
+        choice.elective_group: choice
+        for choice in await dao.elective_choices_for(session, profile.user_id, term_code)
+    }
+
+    groups: dict[str, list[dict[str, object]]] = {}
+    for row in offerings:
+        subject = cast(Any, row["subject"])
+        group = str(subject.elective_group)
+        groups.setdefault(group, []).append(
+            {
+                "offering_id": row["id"],
+                "subject_code": subject.code,
+                "subject_name": subject.name,
+                "elective_group": group,
+                "credits": subject.credits,
+                "theory_hours": subject.theory_hours,
+                "lab_hours": subject.lab_hours,
+                "chosen": group in chosen and chosen[group].offering_id == row["id"],
+            }
+        )
+
+    return [
+        {
+            "elective_group": group,
+            "chosen_offering_id": chosen[group].offering_id if group in chosen else None,
+            "options": sorted(options, key=lambda o: str(o["subject_code"])),
+        }
+        for group, options in sorted(groups.items())
+    ]
+
+
+async def choose_elective(
+    session: AsyncSession, ctx: AuthContext, offering_id: uuid.UUID, term_code: str
+) -> StudentElectiveChoice:
+    """Record the student's pick. Changing it replaces the previous choice for
+    that group — the database enforces one per group per term, so a
+    double-submit cannot leave them enrolled in two alternatives."""
+    profile = await dao.get_profile(session, uuid.UUID(ctx.user_id))
+    if profile is None:
+        raise HTTPException(status_code=404, detail="No student record for this account.")
+
+    offering = await org_service.get_offering(session, offering_id)
+    subject = await org_service.get_subject(session, offering.subject_id)
+    if subject.kind != "elective":
+        raise HTTPException(
+            status_code=422, detail=f"'{subject.code}' is a core subject — it is not chosen."
+        )
+    if offering.program_id != profile.program_id:
+        raise HTTPException(
+            status_code=403, detail="That subject is not offered to your Programme."
+        )
+    if offering.position != profile.position:
+        raise HTTPException(
+            status_code=422,
+            detail=f"'{subject.code}' is taught at position {offering.position}; "
+            f"you are at {profile.position}.",
+        )
+
+    existing = await dao.elective_choice_for_group(
+        session, profile.user_id, term_code, str(subject.elective_group)
+    )
+    if existing is not None:
+        if existing.offering_id == offering_id:
+            return existing
+        existing.offering_id = offering_id
+        choice = existing
+    else:
+        choice = StudentElectiveChoice(
+            user_id=profile.user_id,
+            offering_id=offering_id,
+            term_code=term_code,
+            elective_group=str(subject.elective_group),
+        )
+        session.add(choice)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="onb.elective.chosen",
+        object_type="student_elective_choice",
+        object_id=str(choice.id),
+        after={"subject": subject.code, "group": subject.elective_group, "term": term_code},
+    )
+    await session.commit()
+    return choice

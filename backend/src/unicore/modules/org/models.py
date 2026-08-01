@@ -135,3 +135,111 @@ class OrgUnit(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+SUBJECT_KINDS = ("core", "elective")
+# A student chooses one subject within each group they are offered.
+ELECTIVE_GROUPS = ("general", "professional", "open")
+VENUE_KINDS = ("classroom", "lab", "seminar", "auditorium", "workshop")
+
+
+class Subject(Base):
+    """A taught subject, owned by the Department that teaches it.
+
+    Deliberately not owned by a Programme: one subject is offered to several
+    Programmes (the Maths department's MA101 goes to every B.Tech), and
+    duplicating it per Programme would fragment syllabus coverage and the
+    question bank along with it. Where it is *taught* is a SubjectOffering.
+    """
+
+    __tablename__ = "subjects"
+    __table_args__ = (
+        UniqueConstraint("code", name="uq_subjects_code"),
+        Index("ix_subjects_department", "department_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    department_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Enum(*SUBJECT_KINDS, name="subject_kind", create_type=False),
+        nullable=False,
+        default="core",
+    )
+    # Set on electives only — it is what a student chooses *within*.
+    elective_group: Mapped[str | None] = mapped_column(
+        Enum(*ELECTIVE_GROUPS, name="elective_group", create_type=False), nullable=True
+    )
+    credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    theory_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    lab_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(
+        Enum("active", "deactivated", name="org_unit_status", create_type=False),
+        nullable=False,
+        default="active",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SubjectOffering(Base):
+    """Where a subject is taught: (subject, Programme, ladder position)."""
+
+    __tablename__ = "subject_offerings"
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_id", "program_id", "position", name="uq_offering_subject_program_position"
+        ),
+        Index("ix_offerings_program_position", "program_id", "position"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id"), nullable=False)
+    program_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        Enum("active", "deactivated", name="org_unit_status", create_type=False),
+        nullable=False,
+        default="active",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class Venue(Base):
+    """A physical room. University-level with a campus code, because clash
+    detection is university-wide — a School-owned room could not express a
+    shared block, and cross-School double-booking would go undetected."""
+
+    __tablename__ = "venues"
+    __table_args__ = (UniqueConstraint("code", name="uq_venues_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    campus_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    building: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    room: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    capacity: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Enum(*VENUE_KINDS, name="venue_kind", create_type=False),
+        nullable=False,
+        default="classroom",
+    )
+    status: Mapped[str] = mapped_column(
+        Enum("active", "deactivated", name="org_unit_status", create_type=False),
+        nullable=False,
+        default="active",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

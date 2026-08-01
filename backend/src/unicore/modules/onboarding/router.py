@@ -3,7 +3,7 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +12,8 @@ from unicore.core.security import AuthContext
 from unicore.modules.onboarding import service
 from unicore.modules.onboarding.schemas import (
     AllotRequest,
+    ElectiveChoiceRequest,
+    ElectiveGroupOut,
     EnrollmentImportResult,
     ImportRunOut,
     RowErrorOut,
@@ -21,6 +23,15 @@ from unicore.modules.onboarding.schemas import (
 from unicore.modules.rbac.service import require_permission
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
+
+
+def _ctx(request: Request) -> AuthContext:
+    """Own-data endpoints resolve their subject from the token, never from the
+    client (project security rule)."""
+    ctx: AuthContext | None = getattr(request.state, "auth", None)
+    if ctx is None:  # pragma: no cover — the gate rejects earlier
+        raise HTTPException(status_code=401, detail="Unauthenticated.")
+    return ctx
 
 
 @router.post("/imports", response_model=ImportRunOut, status_code=201)
@@ -172,3 +183,43 @@ async def section_roster(
     ctx: AuthContext = Depends(require_permission("onb:read")),
 ) -> list[dict[str, object]]:
     return await service.section_roster(session, ctx, section_id, as_of)
+
+
+@router.post("/staff/imports", response_model=ImportRunOut, status_code=201)
+async def import_staff(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("onb:staff-import")),
+) -> ImportRunOut:
+    """Bulk staff provisioning; the designation column grants the matching role."""
+    content = await file.read()
+    run = await service.import_staff(session, ctx, file.filename or "staff.csv", content)
+    return ImportRunOut.model_validate(run)
+
+
+@router.get("/me/electives", response_model=list[ElectiveGroupOut])
+async def my_elective_options(
+    term_code: str = Query(..., min_length=1, max_length=50),
+    request: Request = None,  # type: ignore[assignment]
+    session: AsyncSession = Depends(get_session),
+) -> list[ElectiveGroupOut]:
+    """The elective groups open to the signed-in student, and their current pick.
+
+    Own-data endpoint: the subject is the caller, resolved from the AuthContext
+    rather than from any client-supplied id (project security rule).
+    """
+    rows = await service.elective_options(session, _ctx(request), term_code)
+    return [ElectiveGroupOut.model_validate(row) for row in rows]
+
+
+@router.post("/me/electives", status_code=201)
+async def choose_my_elective(
+    payload: ElectiveChoiceRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> dict[str, str]:
+    """Pick one subject within an elective group. Re-posting replaces the pick."""
+    choice = await service.choose_elective(
+        session, _ctx(request), payload.offering_id, payload.term_code
+    )
+    return {"choice_id": str(choice.id), "elective_group": choice.elective_group}

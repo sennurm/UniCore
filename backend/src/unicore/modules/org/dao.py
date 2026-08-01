@@ -6,7 +6,14 @@ from collections.abc import Sequence
 from sqlalchemy import cast, func, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from unicore.modules.org.models import Ltree, OrgUnit, UniversitySetting
+from unicore.modules.org.models import (
+    Ltree,
+    OrgUnit,
+    Subject,
+    SubjectOffering,
+    UniversitySetting,
+    Venue,
+)
 
 
 async def get_by_id(session: AsyncSession, unit_id: uuid.UUID) -> OrgUnit | None:
@@ -181,3 +188,113 @@ async def move_subtree(
             "subtree": subtree_root_path,
         },
     )
+
+
+# --- subjects, offerings and venues ------------------------------------------
+
+
+async def get_subject_by_code(session: AsyncSession, code: str) -> Subject | None:
+    result = await session.execute(select(Subject).where(Subject.code == code))
+    return result.scalar_one_or_none()
+
+
+async def get_subject(session: AsyncSession, subject_id: uuid.UUID) -> Subject | None:
+    return await session.get(Subject, subject_id)
+
+
+async def list_subjects(
+    session: AsyncSession,
+    department_id: uuid.UUID | None,
+    kind: str | None,
+    search: str | None,
+    include_inactive: bool,
+    limit: int,
+) -> Sequence[Subject]:
+    query = select(Subject).order_by(Subject.code).limit(limit)
+    if department_id is not None:
+        query = query.where(Subject.department_id == department_id)
+    if kind:
+        query = query.where(Subject.kind == kind)
+    if not include_inactive:
+        query = query.where(Subject.status == "active")
+    if search:
+        pattern = f"%{search.lower()}%"
+        query = query.where(
+            func.lower(Subject.name).like(pattern) | func.lower(Subject.code).like(pattern)
+        )
+    result = await session.execute(query)
+    return result.scalars().all()
+
+
+async def find_offering(
+    session: AsyncSession, subject_id: uuid.UUID, program_id: uuid.UUID, position: int
+) -> SubjectOffering | None:
+    result = await session.execute(
+        select(SubjectOffering).where(
+            SubjectOffering.subject_id == subject_id,
+            SubjectOffering.program_id == program_id,
+            SubjectOffering.position == position,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def get_offering(
+    session: AsyncSession, offering_id: uuid.UUID
+) -> SubjectOffering | None:
+    return await session.get(SubjectOffering, offering_id)
+
+
+async def list_offerings(
+    session: AsyncSession,
+    program_id: uuid.UUID,
+    position: int | None = None,
+    kind: str | None = None,
+) -> Sequence[tuple[SubjectOffering, Subject]]:
+    """Offerings with their subject — the curriculum of a Programme position."""
+    query = (
+        select(SubjectOffering, Subject)
+        .join(Subject, Subject.id == SubjectOffering.subject_id)
+        .where(
+            SubjectOffering.program_id == program_id,
+            SubjectOffering.status == "active",
+            Subject.status == "active",
+        )
+        .order_by(Subject.code)
+    )
+    if position is not None:
+        query = query.where(SubjectOffering.position == position)
+    if kind:
+        query = query.where(Subject.kind == kind)
+    result = await session.execute(query)
+    return [(offering, subject) for offering, subject in result.all()]
+
+
+async def get_venue_by_code(session: AsyncSession, code: str) -> Venue | None:
+    result = await session.execute(select(Venue).where(Venue.code == code))
+    return result.scalar_one_or_none()
+
+
+async def get_venue(session: AsyncSession, venue_id: uuid.UUID) -> Venue | None:
+    return await session.get(Venue, venue_id)
+
+
+async def list_venues(
+    session: AsyncSession,
+    kind: str | None,
+    search: str | None,
+    include_inactive: bool,
+    limit: int,
+) -> Sequence[Venue]:
+    query = select(Venue).order_by(Venue.code).limit(limit)
+    if kind:
+        query = query.where(Venue.kind == kind)
+    if not include_inactive:
+        query = query.where(Venue.status == "active")
+    if search:
+        pattern = f"%{search.lower()}%"
+        query = query.where(
+            func.lower(Venue.name).like(pattern) | func.lower(Venue.code).like(pattern)
+        )
+    result = await session.execute(query)
+    return result.scalars().all()

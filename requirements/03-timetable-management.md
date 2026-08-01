@@ -25,7 +25,7 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 - Constraint-based auto-generation (future phase). The data model must keep constraints (faculty availability, venue attributes, lab-group/elective-group structures) as first-class data so a solver can be added without remodeling — but no solver ships in MVP.
 - Decentralized timetable authoring by Departments (MVP is central Timetable Cell only).
 - Room booking for non-teaching events (seminars, meetings) — out of scope.
-- Student self-selection of electives (Open Question for post-MVP; MVP is admin-assigned).
+- ~~Student self-selection of electives~~ — **reversed 31-07-2026.** Students now choose their own elective: each elective offering belongs to one of three groups (General, Professional, Open), and a student picks exactly one subject per group per term, enforced by a database constraint so a double-submit cannot enrol them in two alternatives. Department admin staff retain elective-group *capacity* management (TTM-FR-14); capacity limits on student choice are not yet enforced and remain open.
 - Attendance capture itself — see 04-attendance-capture.md; this module only feeds it the published schedule.
 
 ## 3. Affected User Groups & Access
@@ -202,7 +202,8 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 ## 10. Assumptions
 
 - Venue master data (rooms, labs, capacities, campus) is maintainable by System Admin before timetable authoring starts; venues belong to exactly one campus.
-- Course/subject catalog (what is taught in which Program term) arrives from ERP or academic setup outside this module; TTM references courses, does not define them.
+- Subject catalogue: the **org module** owns it (locked 31-07-2026 — previously unowned, which blocked this module entirely). A **Subject** belongs to the Department that teaches it and carries code, name, kind (core/elective), elective group, credits and theory/lab hours; a **SubjectOffering** places it at (Programme, position), so one subject serves many Programmes. TTM references offerings and does not define them.
+- Venues: org-owned, University-level with a campus code, carrying capacity and kind (classroom/lab/seminar/auditorium/workshop). Clash detection is university-wide, so rooms cannot be School-owned.
 - Section, lab-group, and elective-group membership is served by the ONB membership-as-of-date API (ONB-FR-10); TTM owns Section-*instance* creation (TTM-FR-19) but not student membership, except elective-group assignment.
 - One Timetable Cell per campus; cross-campus teaching (one Faculty Member at two campuses) is rare but real — clash checks therefore run on the Faculty Member globally, not per campus.
 - Substitution semantics for attendance (session-open rights) are specified in 04-attendance-capture.md; TTM only records the assignment.

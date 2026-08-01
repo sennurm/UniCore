@@ -35,6 +35,14 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "org:deactivate": ("super-admin",),
     "org:reparent": ("super-admin",),
     "org:read": ("super-admin", "system-admin"),
+    # Subjects are academic master data: HoDs own their Department's catalogue,
+    # and everyone who builds or teaches a timetable needs to read it.
+    "subject:write": ("super-admin", "system-admin", "school-incharge", "hod"),
+    "subject:read": ("super-admin", "system-admin", "school-incharge", "hod",
+                     "timetable-cell", "office-staff", "student"),
+    # Rooms are physical estate, maintained centrally (TTM-FR §4).
+    "venue:write": ("super-admin", "system-admin"),
+    "venue:read": ("super-admin", "system-admin", "timetable-cell", "school-incharge", "hod"),
     "user:create": ("super-admin", "system-admin"),
     "user:read": ("super-admin", "system-admin"),
     "user:deactivate": ("super-admin", "system-admin"),
@@ -64,6 +72,9 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "templates:read": ("super-admin", "system-admin", "office-staff", "timetable-cell",
                        "school-incharge"),
     "onb:import": ("super-admin", "system-admin", "office-staff"),
+    # Staff provisioning grants roles, so it stays with the admins who may
+    # already issue them rather than with School office staff.
+    "onb:staff-import": ("super-admin", "system-admin"),
     "onb:read": ("super-admin", "system-admin", "office-staff", "school-incharge", "hod",
                  "class-incharge"),
     "onb:allot": ("super-admin", "system-admin", "office-staff"),

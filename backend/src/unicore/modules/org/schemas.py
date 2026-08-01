@@ -264,3 +264,244 @@ class OrgImportResult(BaseModel):
     rows_unchanged: int
     rows_rejected: int
     errors: list[OrgImportRowError]
+
+
+# --- subjects, offerings and venues (master data for TTM) --------------------
+
+SUBJECT_KINDS = ("core", "elective")
+ELECTIVE_GROUPS = ("general", "professional", "open")
+VENUE_KINDS = ("classroom", "lab", "seminar", "auditorium", "workshop")
+
+
+class SubjectCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=200)
+    department_id: uuid.UUID
+    kind: Literal["core", "elective"] = "core"
+    elective_group: Literal["general", "professional", "open"] | None = None
+    credits: int = Field(default=0, ge=0, le=30)
+    theory_hours: int = Field(default=0, ge=0, le=40)
+    lab_hours: int = Field(default=0, ge=0, le=40)
+
+    @model_validator(mode="after")
+    def _group_matches_kind(self) -> "SubjectCreate":
+        if self.kind == "elective" and self.elective_group is None:
+            raise ValueError(
+                "an elective needs an elective_group — it is what students choose within"
+            )
+        if self.kind == "core" and self.elective_group is not None:
+            raise ValueError("a core subject is not chosen, so it carries no elective_group")
+        return self
+
+
+class SubjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    credits: int | None = Field(default=None, ge=0, le=30)
+    theory_hours: int | None = Field(default=None, ge=0, le=40)
+    lab_hours: int | None = Field(default=None, ge=0, le=40)
+
+
+class SubjectOut(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    department_id: uuid.UUID
+    kind: str
+    elective_group: str | None
+    credits: int
+    theory_hours: int
+    lab_hours: int
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class OfferingCreate(BaseModel):
+    subject_id: uuid.UUID
+    program_id: uuid.UUID
+    position: int = Field(ge=1, le=12)
+
+
+class OfferingOut(BaseModel):
+    id: uuid.UUID
+    subject_id: uuid.UUID
+    program_id: uuid.UUID
+    position: int
+    status: str
+    subject: SubjectOut
+
+    model_config = {"from_attributes": True}
+
+
+class VenueCreate(BaseModel):
+    code: str = Field(min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
+    name: str = Field(min_length=1, max_length=150)
+    capacity: int = Field(ge=1, le=2000)
+    kind: Literal["classroom", "lab", "seminar", "auditorium", "workshop"] = "classroom"
+    campus_code: str | None = Field(default=None, max_length=50)
+    building: str | None = Field(default=None, max_length=100)
+    room: str | None = Field(default=None, max_length=50)
+
+
+class VenueUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=150)
+    capacity: int | None = Field(default=None, ge=1, le=2000)
+    kind: Literal["classroom", "lab", "seminar", "auditorium", "workshop"] | None = None
+    campus_code: str | None = Field(default=None, max_length=50)
+    building: str | None = Field(default=None, max_length=100)
+    room: str | None = Field(default=None, max_length=50)
+
+
+class VenueOut(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    campus_code: str | None
+    building: str | None
+    room: str | None
+    capacity: int
+    kind: str
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+SUBJECT_CSV_COLUMNS = (
+    "subject_code",
+    "subject_name",
+    "department_code",
+    "kind",
+    "elective_group",
+    "credits",
+    "theory_hours",
+    "lab_hours",
+    "programme_code",
+    "position",
+)
+
+register(
+    CsvTemplate(
+        key="subjects",
+        title="Subject catalogue",
+        description=(
+            "Subjects and where they are taught. One row per subject-offering: a "
+            "subject shared by three Programmes appears on three rows."
+        ),
+        columns=SUBJECT_CSV_COLUMNS,
+        examples=(
+            {
+                "subject_code": "MA101",
+                "subject_name": "Engineering Mathematics I",
+                "department_code": "MATHS",
+                "kind": "core",
+                "elective_group": "",
+                "credits": "4",
+                "theory_hours": "4",
+                "lab_hours": "0",
+                "programme_code": "BT-CSE",
+                "position": "1",
+            },
+            {
+                # Same subject, offered to a second Programme — one definition,
+                # two offerings. Attributes are read from the first row only.
+                "subject_code": "MA101",
+                "subject_name": "Engineering Mathematics I",
+                "department_code": "MATHS",
+                "kind": "core",
+                "elective_group": "",
+                "credits": "4",
+                "theory_hours": "4",
+                "lab_hours": "0",
+                "programme_code": "BT-AIDS",
+                "position": "1",
+            },
+            {
+                "subject_code": "CS501",
+                "subject_name": "Machine Learning",
+                "department_code": "CSE",
+                "kind": "elective",
+                "elective_group": "professional",
+                "credits": "3",
+                "theory_hours": "3",
+                "lab_hours": "2",
+                "programme_code": "BT-CSE",
+                "position": "5",
+            },
+            {
+                "subject_code": "OE201",
+                "subject_name": "Indian Constitution",
+                "department_code": "HUM",
+                "kind": "elective",
+                "elective_group": "open",
+                "credits": "2",
+                "theory_hours": "2",
+                "lab_hours": "0",
+                "programme_code": "BT-CSE",
+                "position": "3",
+            },
+        ),
+        notes=(
+            "SAMPLE DATA — replace the rows below with your own before uploading.",
+            "ONE ROW PER OFFERING. A subject taught to several Programmes repeats, "
+            "changing only programme_code and position; it is defined once and "
+            "offered many times, so its credits and hours are read from the first "
+            "row and later rows only place it.",
+            "department_code is the department that OWNS the subject (Maths owns "
+            "MA101), not the Programme that studies it — that is programme_code.",
+            "kind is 'core' or 'elective'. An elective MUST name an "
+            "elective_group: general, professional, or open. A core subject must "
+            "leave elective_group blank.",
+            "Students choose exactly one subject within each elective group they "
+            "are offered for a term, so two electives in the same group at the "
+            "same position are alternatives, not both taught to one student.",
+            "position is the ladder position the subject is taught at — the "
+            "semester number for a semester-cadence Programme, the year number "
+            "for a yearly one.",
+            "Re-uploading is safe: subjects match on subject_code and offerings on "
+            "(subject, programme, position); neither is duplicated.",
+        ),
+    )
+)
+
+VENUE_CSV_COLUMNS = ("code", "name", "capacity", "kind", "campus_code", "building", "room")
+
+register(
+    CsvTemplate(
+        key="venues",
+        title="Venues",
+        description="Rooms available for timetabling, with capacity and type.",
+        columns=VENUE_CSV_COLUMNS,
+        examples=(
+            {
+                "code": "A101",
+                "name": "Lecture Hall A101",
+                "capacity": "60",
+                "kind": "classroom",
+                "campus_code": "MAIN",
+                "building": "Academic Block A",
+                "room": "101",
+            },
+            {
+                "code": "CSLAB1",
+                "name": "Computer Lab 1",
+                "capacity": "30",
+                "kind": "lab",
+                "campus_code": "MAIN",
+                "building": "Academic Block B",
+                "room": "G02",
+            },
+        ),
+        notes=(
+            "SAMPLE DATA — replace the rows below with your own before uploading.",
+            "kind is one of: classroom, lab, seminar, auditorium, workshop. It "
+            "matters because a lab block must be scheduled in a lab.",
+            "Venues are university-wide, not owned by a School: clash detection "
+            "spans the whole university, so a room cannot host two sessions even "
+            "if the two Schools never speak to each other.",
+            "capacity drives the soft over-capacity warning when a Section larger "
+            "than the room is scheduled into it.",
+            "Re-uploading is safe: rows match on code and are updated, never "
+            "duplicated.",
+        ),
+    )
+)

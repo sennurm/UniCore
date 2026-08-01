@@ -147,6 +147,8 @@ PERMISSION_EXEMPT = {
     "consent_status",
     "file_grievance",  # own grievance
     "my_grievances",
+    "my_elective_options",  # own electives, resolved from the token
+    "choose_my_elective",
 }
 
 

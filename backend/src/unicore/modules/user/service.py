@@ -109,6 +109,45 @@ async def deactivate_user(session: AsyncSession, ctx: AuthContext, user_id: uuid
     return user
 
 
+async def provision_staff(
+    session: AsyncSession,
+    ctx: AuthContext,
+    *,
+    username: str,
+    full_name: str,
+    email: str | None = None,
+    mobile: str | None = None,
+) -> User:
+    """Staff counterpart of `provision_student`: no commit (the run owns the
+    transaction), IMPORTED until credential delivery activates the account.
+
+    Takes primitives rather than a schema object so other modules never import
+    this module's schemas (ARCHITECTURE.md: service-to-service only).
+    """
+    if await dao.get_by_username(session, username) is not None:
+        username = f"{username}.{uuid.uuid4().hex[:4]}"
+    user = User(
+        username=username,
+        full_name=full_name,
+        email=email,
+        mobile=mobile,
+        kind="staff",
+        status="imported",
+        force_password_change=True,
+    )
+    session.add(user)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="user.staff.provisioned",
+        object_type="user",
+        object_id=str(user.id),
+        after={"username": user.username, "full_name": user.full_name},
+    )
+    return user
+
+
 async def provision_student(
     session: AsyncSession,
     ctx: AuthContext,

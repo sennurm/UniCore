@@ -156,3 +156,54 @@ class SectionMembership(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class StudentElectiveChoice(Base):
+    """The one subject a student picked within an elective group, for a term.
+
+    Student self-selection (locked 31-07-2026) reverses TTM's earlier
+    "MVP is admin-assigned" non-goal. `elective_group` is denormalised from the
+    subject so "one choice per group per term" is a database constraint rather
+    than a service check that a concurrent double-submit could slip past.
+    """
+
+    __tablename__ = "student_elective_choices"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "term_code", "elective_group", name="uq_elective_choice_per_group"
+        ),
+        Index("ix_elective_choices_offering", "offering_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), nullable=False)
+    offering_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subject_offerings.id"), nullable=False
+    )
+    term_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    elective_group: Mapped[str] = mapped_column(
+        Enum("general", "professional", "open", name="elective_group", create_type=False),
+        nullable=False,
+    )
+    chosen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class StaffProfile(Base):
+    """Staff counterpart of StudentProfile: the employee id an HR/ERP feed
+    matches on, and the designation that decides which role they hold."""
+
+    __tablename__ = "staff_profiles"
+    __table_args__ = (UniqueConstraint("employee_id", name="uq_staff_employee_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    employee_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    department_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("org_units.id"), nullable=True
+    )
+    designation: Mapped[str] = mapped_column(String(60), nullable=False)
+    date_of_joining: Mapped[date | None] = mapped_column(Date, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

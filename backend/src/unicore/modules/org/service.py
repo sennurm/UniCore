@@ -25,12 +25,19 @@ from unicore.modules.org.models import (
     PARENT_TYPE_OF,
     POSITIONS_PER_YEAR,
     OrgUnit,
+    Subject,
+    SubjectOffering,
+    Venue,
 )
 from unicore.modules.org.schemas import (
     ORG_CSV_COLUMNS,
     PROGRAMME_CATEGORIES,
+    SUBJECT_CSV_COLUMNS,
+    VENUE_CSV_COLUMNS,
+    VENUE_KINDS,
     OrgUnitCreate,
 )
+from unicore.modules.org.schemas import SubjectCreate as OrgUnitSubjectCreate
 
 
 def _label(code: str) -> str:
@@ -820,3 +827,408 @@ async def list_units(
 ) -> list[OrgUnit]:
     """Flat, filterable listing powering the org table."""
     return list(await dao.list_units(session, unit_type, search, include_inactive, limit))
+
+
+# --- subjects, offerings and venues (master data for TTM) --------------------
+
+
+async def create_subject(
+    session: AsyncSession, ctx: AuthContext, data: OrgUnitSubjectCreate
+) -> Subject:
+    department = await _get_or_404(session, data.department_id)
+    if department.type != "department":
+        raise HTTPException(
+            status_code=422,
+            detail=f"A subject is owned by a Department, not a {department.type}.",
+        )
+    if await dao.get_subject_by_code(session, data.code):
+        raise HTTPException(status_code=409, detail=f"Subject '{data.code}' already exists.")
+
+    subject = Subject(
+        code=data.code,
+        name=data.name,
+        department_id=data.department_id,
+        kind=data.kind,
+        elective_group=data.elective_group,
+        credits=data.credits,
+        theory_hours=data.theory_hours,
+        lab_hours=data.lab_hours,
+    )
+    session.add(subject)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.subject.created",
+        object_type="subject",
+        object_id=str(subject.id),
+        scope=department.path,
+        after={"code": subject.code, "name": subject.name, "kind": subject.kind},
+    )
+    await session.commit()
+    return subject
+
+
+async def list_subjects(
+    session: AsyncSession,
+    department_id: uuid.UUID | None = None,
+    kind: str | None = None,
+    search: str | None = None,
+    include_inactive: bool = False,
+    limit: int = 500,
+) -> Sequence[Subject]:
+    return await dao.list_subjects(session, department_id, kind, search, include_inactive, limit)
+
+
+async def update_subject(
+    session: AsyncSession, ctx: AuthContext, subject_id: uuid.UUID, changes: dict[str, object]
+) -> Subject:
+    """Code, owning Department, kind and elective group are immutable: each is
+    referenced by offerings, student choices, syllabus records and question
+    banks, so a change would silently re-point history rather than correct it."""
+    subject = await dao.get_subject(session, subject_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    before = {"name": subject.name, "credits": subject.credits}
+    applied = False
+    for key in ("name", "credits", "theory_hours", "lab_hours"):
+        value = changes.get(key)
+        if value is not None and getattr(subject, key) != value:
+            setattr(subject, key, value)
+            applied = True
+    if not applied:
+        return subject
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.subject.updated",
+        object_type="subject",
+        object_id=str(subject.id),
+        before=before,
+        after={"name": subject.name, "credits": subject.credits},
+    )
+    await session.commit()
+    return subject
+
+
+async def create_offering(
+    session: AsyncSession, ctx: AuthContext, subject_id: uuid.UUID, program_id: uuid.UUID,
+    position: int,
+) -> SubjectOffering:
+    """Place a subject at (Programme, position). Idempotent — re-offering the
+    same subject at the same position returns the existing row."""
+    subject = await dao.get_subject(session, subject_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    programme = await _get_or_404(session, program_id)
+    if programme.type != "program":
+        raise HTTPException(
+            status_code=422, detail=f"Subjects are offered to a Programme, not a {programme.type}."
+        )
+
+    cadence = await effective_cadence(session, programme)
+    ladder = position_ladder(cadence, programme.duration_years)
+    if ladder and position not in ladder:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Position {position} is outside 1..{ladder[-1]} for '{programme.code}'.",
+        )
+
+    existing = await dao.find_offering(session, subject_id, program_id, position)
+    if existing is not None:
+        return existing
+
+    offering = SubjectOffering(
+        subject_id=subject_id, program_id=program_id, position=position
+    )
+    session.add(offering)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.offering.created",
+        object_type="subject_offering",
+        object_id=str(offering.id),
+        scope=programme.path,
+        after={"subject": subject.code, "programme": programme.code, "position": position},
+    )
+    await session.commit()
+    return offering
+
+
+async def list_offerings(
+    session: AsyncSession,
+    program_id: uuid.UUID,
+    position: int | None = None,
+    kind: str | None = None,
+) -> list[dict[str, object]]:
+    """A Programme's curriculum: offerings paired with their subject."""
+    rows = await dao.list_offerings(session, program_id, position, kind)
+    return [
+        {
+            "id": offering.id,
+            "subject_id": offering.subject_id,
+            "program_id": offering.program_id,
+            "position": offering.position,
+            "status": offering.status,
+            "subject": subject,
+        }
+        for offering, subject in rows
+    ]
+
+
+async def get_offering(session: AsyncSession, offering_id: uuid.UUID) -> SubjectOffering:
+    offering = await dao.get_offering(session, offering_id)
+    if offering is None:
+        raise HTTPException(status_code=404, detail="Subject offering not found.")
+    return offering
+
+
+async def get_subject(session: AsyncSession, subject_id: uuid.UUID) -> Subject:
+    subject = await dao.get_subject(session, subject_id)
+    if subject is None:
+        raise HTTPException(status_code=404, detail="Subject not found.")
+    return subject
+
+
+async def create_venue(
+    session: AsyncSession, ctx: AuthContext, data: dict[str, object]
+) -> Venue:
+    code = cast(str, data["code"])
+    if await dao.get_venue_by_code(session, code):
+        raise HTTPException(status_code=409, detail=f"Venue '{code}' already exists.")
+    venue = Venue(**data)
+    session.add(venue)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.venue.created",
+        object_type="venue",
+        object_id=str(venue.id),
+        after={"code": venue.code, "name": venue.name, "capacity": venue.capacity},
+    )
+    await session.commit()
+    return venue
+
+
+async def update_venue(
+    session: AsyncSession, ctx: AuthContext, venue_id: uuid.UUID, changes: dict[str, object]
+) -> Venue:
+    venue = await dao.get_venue(session, venue_id)
+    if venue is None:
+        raise HTTPException(status_code=404, detail="Venue not found.")
+    before = {"name": venue.name, "capacity": venue.capacity, "kind": venue.kind}
+    applied = False
+    for key in ("name", "capacity", "kind", "campus_code", "building", "room"):
+        value = changes.get(key)
+        if value is not None and getattr(venue, key) != value:
+            setattr(venue, key, value)
+            applied = True
+    if not applied:
+        return venue
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.venue.updated",
+        object_type="venue",
+        object_id=str(venue.id),
+        before=before,
+        after={"name": venue.name, "capacity": venue.capacity, "kind": venue.kind},
+    )
+    await session.commit()
+    return venue
+
+
+async def list_venues(
+    session: AsyncSession,
+    kind: str | None = None,
+    search: str | None = None,
+    include_inactive: bool = False,
+    limit: int = 500,
+) -> Sequence[Venue]:
+    return await dao.list_venues(session, kind, search, include_inactive, limit)
+
+
+async def import_subjects(
+    session: AsyncSession, ctx: AuthContext, filename: str, content: bytes
+) -> dict[str, object]:
+    """One row per *offering*. A subject shared by three Programmes appears on
+    three rows; it is defined by the first row that names it and merely placed
+    by the rest, so its credits and hours cannot disagree between Programmes."""
+    rows, errors = _read_csv(content, SUBJECT_CSV_COLUMNS)
+    subjects_created = offerings_created = unchanged = 0
+
+    for row_number, row in rows:
+        try:
+            # Resolve everything the row needs BEFORE creating anything: a row
+            # naming an unknown Programme must not leave an orphan subject behind.
+            code = _required(row, "subject_code")
+            programme_code = _required(row, "programme_code")
+            programmes = await dao.find_by_code_in_scope(session, programme_code, "program", None)
+            if not programmes:
+                raise _OrgRowError("programme_code", f"unknown Programme '{programme_code}'")
+            position = _whole_number(row, "position", 1, 12)
+            if position is None:
+                raise _OrgRowError("position", "required — where the subject is taught")
+
+            subject = await dao.get_subject_by_code(session, code)
+            if subject is None:
+                subject = await _subject_from_row(session, ctx, row, code)
+                subjects_created += 1
+
+            before = await dao.find_offering(session, subject.id, programmes[0].id, position)
+            await create_offering(session, ctx, subject.id, programmes[0].id, position)
+            if before is None:
+                offerings_created += 1
+            else:
+                unchanged += 1
+        except _OrgRowError as err:
+            errors.append(
+                {
+                    "row_number": row_number,
+                    "field": err.field,
+                    "reason": err.reason,
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items() if v),
+                }
+            )
+        except HTTPException as err:
+            errors.append(
+                {
+                    "row_number": row_number,
+                    "field": "row",
+                    "reason": str(err.detail),
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items() if v),
+                }
+            )
+
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.subjects.imported",
+        object_type="org_import",
+        object_id=filename,
+        after={
+            "subjects_created": subjects_created,
+            "offerings_created": offerings_created,
+            "rows_rejected": len(errors),
+        },
+    )
+    await session.commit()
+    return {
+        "rows_total": len(rows),
+        "subjects_created": subjects_created,
+        "offerings_created": offerings_created,
+        "rows_unchanged": unchanged,
+        "rows_rejected": len(errors),
+        "errors": errors,
+    }
+
+
+async def _subject_from_row(
+    session: AsyncSession, ctx: AuthContext, row: dict[str, str], code: str
+) -> Subject:
+    department_code = _required(row, "department_code")
+    departments = await dao.find_by_code_in_scope(session, department_code, "department", None)
+    if not departments:
+        raise _OrgRowError("department_code", f"unknown Department '{department_code}'")
+    kind = (row.get("kind") or "core").strip().lower()
+    group = (row.get("elective_group") or "").strip().lower() or None
+    try:
+        payload = OrgUnitSubjectCreate(
+            code=code,
+            name=_required(row, "subject_name"),
+            department_id=departments[0].id,
+            kind=kind,  # type: ignore[arg-type]
+            elective_group=group,  # type: ignore[arg-type]
+            credits=_whole_number(row, "credits", 0, 30) or 0,
+            theory_hours=_whole_number(row, "theory_hours", 0, 40) or 0,
+            lab_hours=_whole_number(row, "lab_hours", 0, 40) or 0,
+        )
+    except ValueError as err:
+        raise _OrgRowError("kind", str(err)) from None
+    return await create_subject(session, ctx, payload)
+
+
+async def import_venues(
+    session: AsyncSession, ctx: AuthContext, filename: str, content: bytes
+) -> dict[str, object]:
+    rows, errors = _read_csv(content, VENUE_CSV_COLUMNS)
+    created = updated = 0
+
+    for row_number, row in rows:
+        try:
+            code = _required(row, "code")
+            capacity = _whole_number(row, "capacity", 1, 2000)
+            if capacity is None:
+                raise _OrgRowError("capacity", "required — a room seats a number of people")
+            fields: dict[str, object] = {
+                "name": _required(row, "name"),
+                "capacity": capacity,
+                "kind": (row.get("kind") or "classroom").strip().lower(),
+                "campus_code": row.get("campus_code", "").strip() or None,
+                "building": row.get("building", "").strip() or None,
+                "room": row.get("room", "").strip() or None,
+            }
+            if fields["kind"] not in VENUE_KINDS:
+                raise _OrgRowError("kind", f"must be one of: {', '.join(VENUE_KINDS)}")
+
+            existing = await dao.get_venue_by_code(session, code)
+            if existing is None:
+                await create_venue(session, ctx, {"code": code, **fields})
+                created += 1
+            else:
+                await update_venue(session, ctx, existing.id, fields)
+                updated += 1
+        except _OrgRowError as err:
+            errors.append(
+                {
+                    "row_number": row_number,
+                    "field": err.field,
+                    "reason": err.reason,
+                    "raw_row": ",".join(f"{k}={v}" for k, v in row.items() if v),
+                }
+            )
+
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.venues.imported",
+        object_type="org_import",
+        object_id=filename,
+        after={"created": created, "updated": updated, "rows_rejected": len(errors)},
+    )
+    await session.commit()
+    return {
+        "rows_total": len(rows),
+        "rows_created": created,
+        "rows_updated": updated,
+        "rows_rejected": len(errors),
+        "errors": errors,
+    }
+
+
+def _read_csv(
+    content: bytes, columns: tuple[str, ...]
+) -> tuple[list[tuple[int, dict[str, str]]], list[dict[str, object]]]:
+    """Shared parse for the master-data importers: header check, `#` notes
+    stripped, rows numbered from 2 so they match the spreadsheet."""
+    if not content:
+        raise HTTPException(status_code=422, detail="File is empty.")
+    try:
+        text_content = content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="File must be UTF-8 encoded.") from None
+
+    reader = csv.DictReader(io.StringIO(strip_comments(text_content)))
+    missing = set(columns) - {h.strip() for h in (reader.fieldnames or [])}
+    if missing:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Header does not match the template — missing: {', '.join(sorted(missing))}.",
+        )
+    rows = [
+        (index, {k: (v or "").strip() for k, v in raw.items() if k})
+        for index, raw in enumerate(reader, start=2)
+    ]
+    return rows, []
