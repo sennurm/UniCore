@@ -1112,6 +1112,13 @@ async def get_subject(session: AsyncSession, subject_id: uuid.UUID) -> Subject:
     return subject
 
 
+async def get_venue(session: AsyncSession, venue_id: uuid.UUID) -> Venue:
+    venue = await dao.get_venue(session, venue_id)
+    if venue is None:
+        raise HTTPException(status_code=404, detail="Venue not found.")
+    return venue
+
+
 async def create_venue(
     session: AsyncSession, ctx: AuthContext, data: dict[str, object]
 ) -> Venue:

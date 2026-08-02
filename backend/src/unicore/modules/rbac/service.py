@@ -64,6 +64,15 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "ttm:term-read": ("super-admin", "system-admin", "office-staff", "school-incharge",
                       "timetable-cell", "hod"),
     "ttm:section-create": ("super-admin", "system-admin", "timetable-cell"),
+    # The Timetable Cell authors; HoDs approve their Department's portion; the
+    # Cell publishes. Reading a draft is wider — faculty and students see only
+    # published timetables, which is a separate read path.
+    "ttm:grid-write": ("super-admin", "system-admin", "timetable-cell"),
+    "ttm:draft-write": ("super-admin", "system-admin", "timetable-cell"),
+    "ttm:draft-read": ("super-admin", "system-admin", "timetable-cell", "school-incharge",
+                       "hod"),
+    "ttm:draft-approve": ("super-admin", "system-admin", "hod", "school-incharge"),
+    "ttm:draft-publish": ("super-admin", "system-admin", "timetable-cell"),
     "ttm:section-read": ("super-admin", "system-admin", "timetable-cell", "school-incharge",
                          "office-staff", "hod"),
     # CSV upload templates carry column definitions and sample rows, no real data —

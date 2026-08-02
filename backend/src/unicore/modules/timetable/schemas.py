@@ -1,7 +1,7 @@
 """Pydantic request/response models for the timetable module."""
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -190,3 +190,124 @@ register(
         ),
     )
 )
+
+
+# --- period grids, drafts and entries (TTM-FR-02/03/04/08/09) -----------------
+
+
+class PeriodSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    sequence: int = Field(ge=1, le=20)
+    start_time: time
+    end_time: time
+
+
+class PeriodGridCreate(BaseModel):
+    school_id: uuid.UUID
+    name: str = Field(min_length=1, max_length=100)
+    periods: list[PeriodSpec] = Field(min_length=1, max_length=20)
+
+
+class PeriodOut(BaseModel):
+    id: uuid.UUID
+    name: str
+    sequence: int
+    start_time: time
+    end_time: time
+
+    model_config = {"from_attributes": True}
+
+
+class PeriodGridOut(BaseModel):
+    id: uuid.UUID
+    school_id: uuid.UUID
+    version: int
+    name: str
+    status: str
+    periods: list[PeriodOut]
+
+
+class DraftCreate(BaseModel):
+    school_id: uuid.UUID
+    term_code: str = Field(min_length=1, max_length=50)
+
+
+class DraftOut(BaseModel):
+    id: uuid.UUID
+    school_id: uuid.UUID
+    term_code: str
+    version: int
+    grid_id: uuid.UUID
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class EntryCreate(BaseModel):
+    section_id: uuid.UUID
+    day_of_week: int = Field(ge=1, le=7, description="ISO: Monday = 1")
+    period_id: uuid.UUID
+    offering_id: uuid.UUID
+    faculty_user_id: uuid.UUID
+    venue_id: uuid.UUID
+    # TTM-FR-12: a venue smaller than the Section is a judgement call, so it
+    # warns and needs recorded acknowledgment — unlike a clash, which is refused.
+    acknowledge_capacity: bool = False
+
+
+class EntryOut(BaseModel):
+    id: uuid.UUID
+    draft_id: uuid.UUID
+    section_id: uuid.UUID
+    day_of_week: int
+    period_id: uuid.UUID
+    offering_id: uuid.UUID
+    faculty_user_id: uuid.UUID
+    venue_id: uuid.UUID
+
+    model_config = {"from_attributes": True}
+
+
+class EntryResult(BaseModel):
+    entry: EntryOut
+    warnings: list[str]
+
+
+class ApprovalDecision(BaseModel):
+    department_id: uuid.UUID
+    approve: bool
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class ApprovalOut(BaseModel):
+    department_id: uuid.UUID
+    department_name: str
+    status: str
+    reason: str | None
+
+
+class DraftStatusOut(BaseModel):
+    draft_id: uuid.UUID
+    school_id: uuid.UUID
+    term_code: str
+    version: int
+    status: str
+    entry_count: int
+    approvals: list[ApprovalOut]
+    publishable: bool
+    blocking: list[str]
+
+
+class TimetableRowOut(BaseModel):
+    entry_id: uuid.UUID
+    section_id: uuid.UUID
+    section_name: str
+    day_of_week: int
+    period_name: str
+    start_time: time
+    end_time: time
+    subject_code: str
+    subject_name: str
+    faculty_user_id: uuid.UUID
+    faculty_name: str
+    venue_code: str

@@ -10,10 +10,18 @@ from unicore.core.security import AuthContext
 from unicore.modules.rbac.service import require_permission
 from unicore.modules.timetable import service
 from unicore.modules.timetable.schemas import (
+    ApprovalDecision,
+    DraftCreate,
+    DraftOut,
+    DraftStatusOut,
+    EntryCreate,
+    EntryResult,
     GenerationPlanOut,
     GenerationRequest,
     GenerationResultOut,
     MultiSchoolTermCreate,
+    PeriodGridCreate,
+    PeriodGridOut,
     ProgrammeSectionsOut,
     SchoolTermResult,
     SectionCreate,
@@ -21,6 +29,7 @@ from unicore.modules.timetable.schemas import (
     TermCreate,
     TermOut,
     TermParitySet,
+    TimetableRowOut,
 )
 
 router = APIRouter(prefix="/timetable", tags=["timetable"])
@@ -148,3 +157,120 @@ async def create_section(
         session, ctx, payload.program_id, payload.label, payload.term_code
     )
     return SectionOut.model_validate(section)
+
+
+# --- period grids, drafts, entries, approvals, publish ------------------------
+
+
+@router.post("/grids", response_model=PeriodGridOut, status_code=201)
+async def create_grid(
+    payload: PeriodGridCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:grid-write")),
+) -> PeriodGridOut:
+    """A new grid version for a School. Grids are versioned, never edited."""
+    grid = await service.create_grid(
+        session,
+        ctx,
+        payload.school_id,
+        payload.name,
+        [p.model_dump() for p in payload.periods],
+    )
+    grids = await service.list_grids(session, payload.school_id)
+    return PeriodGridOut.model_validate(next(g for g in grids if g["id"] == grid.id))
+
+
+@router.get("/schools/{school_id}/grids", response_model=list[PeriodGridOut])
+async def list_grids(
+    school_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-read")),
+) -> list[PeriodGridOut]:
+    return [PeriodGridOut.model_validate(g) for g in await service.list_grids(session, school_id)]
+
+
+@router.post("/drafts", response_model=DraftOut, status_code=201)
+async def create_draft(
+    payload: DraftCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-write")),
+) -> DraftOut:
+    draft = await service.create_draft(session, ctx, payload.school_id, payload.term_code)
+    return DraftOut.model_validate(draft)
+
+
+@router.post("/drafts/{draft_id}/entries", response_model=EntryResult, status_code=201)
+async def add_entry(
+    draft_id: uuid.UUID,
+    payload: EntryCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-write")),
+) -> EntryResult:
+    """Place one class. Clashes are refused (409); a too-small venue warns and
+    needs `acknowledge_capacity` to proceed."""
+    result = await service.add_entry(
+        session,
+        ctx,
+        draft_id,
+        payload.section_id,
+        payload.day_of_week,
+        payload.period_id,
+        payload.offering_id,
+        payload.faculty_user_id,
+        payload.venue_id,
+        payload.acknowledge_capacity,
+    )
+    return EntryResult.model_validate(result)
+
+
+@router.delete("/entries/{entry_id}", status_code=204)
+async def remove_entry(
+    entry_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-write")),
+) -> None:
+    await service.remove_entry(session, ctx, entry_id)
+
+
+@router.get("/drafts/{draft_id}", response_model=DraftStatusOut)
+async def draft_status(
+    draft_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-read")),
+) -> DraftStatusOut:
+    """Approval state and everything blocking publication."""
+    return DraftStatusOut.model_validate(await service.draft_status(session, draft_id))
+
+
+@router.get("/drafts/{draft_id}/entries", response_model=list[TimetableRowOut])
+async def timetable_view(
+    draft_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-read")),
+) -> list[TimetableRowOut]:
+    rows = await service.timetable_view(session, draft_id)
+    return [TimetableRowOut.model_validate(r) for r in rows]
+
+
+@router.post("/drafts/{draft_id}/approvals", status_code=200)
+async def decide_approval(
+    draft_id: uuid.UUID,
+    payload: ApprovalDecision,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-approve")),
+) -> dict[str, str]:
+    """An HoD signs off the portion of this draft touching their Department."""
+    approval = await service.decide_approval(
+        session, ctx, draft_id, payload.department_id, payload.approve, payload.reason
+    )
+    return {"status": approval.status}
+
+
+@router.post("/drafts/{draft_id}/publish", response_model=DraftOut)
+async def publish_draft(
+    draft_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:draft-publish")),
+) -> DraftOut:
+    """Make this the term's source of truth for the School."""
+    return DraftOut.model_validate(await service.publish_draft(session, ctx, draft_id))

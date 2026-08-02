@@ -8,7 +8,7 @@ year-based Schools simultaneously.
 import csv
 import io
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from typing import cast
 
 from fastapi import HTTPException
@@ -20,13 +20,23 @@ from unicore.core.templates import strip_comments
 from unicore.modules.audit import service as audit_service
 from unicore.modules.onboarding import service as onboarding_service
 from unicore.modules.org import service as org_service
+from unicore.modules.rbac import service as rbac_service
 from unicore.modules.timetable import dao
-from unicore.modules.timetable.models import TERM_PARITIES, AcademicTerm
+from unicore.modules.timetable.models import (
+    TERM_PARITIES,
+    AcademicTerm,
+    Period,
+    PeriodGrid,
+    TimetableApproval,
+    TimetableDraft,
+    TimetableEntry,
+)
 from unicore.modules.timetable.schemas import (
     SECTION_CSV_COLUMNS,
     MultiSchoolTermCreate,
     TermCreate,
 )
+from unicore.modules.user import service as user_service
 
 
 def _snapshot(term: AcademicTerm) -> dict[str, str | int | None]:
@@ -525,3 +535,562 @@ async def import_sections(
                 {"row_number": row_number, "reason": str(err.detail), "raw_row": str(row)}
             )
     return {"rows_created": created, "rows_rejected": len(errors), "errors": errors}
+
+
+# --- period grids (TTM-FR-02) -------------------------------------------------
+
+
+async def create_grid(
+    session: AsyncSession, ctx: AuthContext, school_id: uuid.UUID, name: str,
+    periods: list[dict[str, object]],
+) -> PeriodGrid:
+    """A new grid version for a School. Grids are never edited in place once a
+    timetable references them — a change would silently move classes for people
+    already holding the published schedule, so a new version plus republish is
+    the only path (TTM-FR-02)."""
+    school = await org_service.get_unit(session, school_id)
+    if school.type != "school":
+        raise HTTPException(status_code=422, detail="A period grid belongs to a School.")
+    if not periods:
+        raise HTTPException(status_code=422, detail="A grid needs at least one Period.")
+
+    previous = await dao.latest_grid(session, school_id)
+    grid = PeriodGrid(
+        school_id=school_id,
+        version=(previous.version + 1) if previous else 1,
+        name=name,
+        status="active",
+        created_by=ctx.user_id,
+    )
+    session.add(grid)
+    await session.flush()
+
+    ordered = sorted(periods, key=lambda p: cast(int, p["sequence"]))
+    last_end: time | None = None
+    for spec in ordered:
+        start, end = cast(time, spec["start_time"]), cast(time, spec["end_time"])
+        if end <= start:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Period '{spec['name']}' ends at or before it starts.",
+            )
+        if last_end is not None and start < last_end:
+            # Overlapping Periods inside one grid would make every Section in the
+            # School clash with itself.
+            raise HTTPException(
+                status_code=422,
+                detail=f"Period '{spec['name']}' starts before the previous one ends.",
+            )
+        last_end = end
+        session.add(
+            Period(
+                grid_id=grid.id,
+                name=cast(str, spec["name"]),
+                sequence=cast(int, spec["sequence"]),
+                start_time=start,
+                end_time=end,
+            )
+        )
+
+    if previous is not None and previous.status == "active":
+        previous.status = "superseded"
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.grid.created",
+        object_type="period_grid",
+        object_id=str(grid.id),
+        scope=school.path,
+        after={"name": name, "version": grid.version, "periods": len(ordered)},
+    )
+    await session.commit()
+    return grid
+
+
+async def list_grids(session: AsyncSession, school_id: uuid.UUID) -> list[dict[str, object]]:
+    grids = await dao.list_grids(session, school_id)
+    return [
+        {
+            "id": grid.id,
+            "school_id": grid.school_id,
+            "version": grid.version,
+            "name": grid.name,
+            "status": grid.status,
+            "periods": list(await dao.list_periods(session, grid.id)),
+        }
+        for grid in grids
+    ]
+
+
+# --- drafts (TTM-FR-03/08/09) -------------------------------------------------
+
+
+async def create_draft(
+    session: AsyncSession, ctx: AuthContext, school_id: uuid.UUID, term_code: str
+) -> TimetableDraft:
+    """Open a draft for a School's term, on that School's active grid."""
+    school = await org_service.get_unit(session, school_id)
+    if school.type != "school":
+        raise HTTPException(status_code=422, detail="A timetable draft belongs to a School.")
+    await require_approved_term(session, school_id, term_code)
+
+    grid = await dao.active_grid(session, school_id)
+    if grid is None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{school.name} has no active period grid — define one before drafting.",
+        )
+    open_draft = await dao.latest_draft_version(session, school_id, term_code)
+    if open_draft is not None and open_draft.status == "draft":
+        return open_draft
+
+    draft = TimetableDraft(
+        school_id=school_id,
+        term_code=term_code,
+        version=(open_draft.version + 1) if open_draft else 1,
+        grid_id=grid.id,
+        created_by=ctx.user_id,
+    )
+    session.add(draft)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.draft.created",
+        object_type="timetable_draft",
+        object_id=str(draft.id),
+        scope=school.path,
+        after={"term_code": term_code, "version": draft.version},
+    )
+    await session.commit()
+    return draft
+
+
+async def _require_open_draft(session: AsyncSession, draft_id: uuid.UUID) -> TimetableDraft:
+    draft = await dao.get_draft(session, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Timetable draft not found.")
+    if draft.status != "draft":
+        raise HTTPException(
+            status_code=409,
+            detail=f"This timetable is {draft.status} — republish creates a new version "
+            "rather than editing it.",
+        )
+    return draft
+
+
+# --- entries and clash detection (TTM-FR-03/04/12) ----------------------------
+
+
+async def add_entry(
+    session: AsyncSession,
+    ctx: AuthContext,
+    draft_id: uuid.UUID,
+    section_id: uuid.UUID,
+    day_of_week: int,
+    period_id: uuid.UUID,
+    offering_id: uuid.UUID,
+    faculty_user_id: uuid.UUID,
+    venue_id: uuid.UUID,
+    acknowledge_capacity: bool = False,
+) -> dict[str, object]:
+    """Place one class in the grid. Clashes are a hard save-time block (TTM-FR-04).
+
+    Venue capacity is a *soft* warning that needs recorded acknowledgment to
+    proceed (TTM-FR-12) — a room slightly too small is a judgement call, whereas
+    a double-booked room is never intended.
+    """
+    draft = await _require_open_draft(session, draft_id)
+    period = await dao.get_period(session, period_id)
+    if period is None or period.grid_id != draft.grid_id:
+        raise HTTPException(
+            status_code=422, detail="That Period does not belong to this timetable's grid."
+        )
+    if day_of_week not in range(1, 8):
+        raise HTTPException(status_code=422, detail="day_of_week is 1 (Monday) to 7.")
+
+    section = await org_service.get_unit(session, section_id)
+    if section.type != "section":
+        raise HTTPException(status_code=422, detail="A timetable entry belongs to a Section.")
+    if section.term_code != draft.term_code:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Section '{section.name}' is for term {section.term_code}, "
+            f"not {draft.term_code}.",
+        )
+    school_id = await org_service.ancestor_of_type(session, section_id, "school")
+    if school_id != draft.school_id:
+        raise HTTPException(
+            status_code=422, detail="That Section belongs to another School's timetable."
+        )
+
+    offering = await org_service.get_offering(session, offering_id)
+    subject = await org_service.get_subject(session, offering.subject_id)
+    # A Programme-bound offering must match the Section's Programme and ladder
+    # position; a university-wide one (Open elective) fits any Section.
+    if offering.program_id is not None:
+        if offering.program_id != section.parent_id:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{subject.code}' is not offered to this Section's Programme.",
+            )
+        if section.position is not None and offering.position != section.position:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{subject.code}' is taught at position {offering.position}; "
+                f"this Section is at {section.position}.",
+            )
+
+    venue = await org_service.get_venue(session, venue_id)
+    faculty = await user_service.get_user(session, faculty_user_id)
+    if faculty.kind != "staff":
+        raise HTTPException(status_code=422, detail="Only staff can be assigned to teach.")
+
+    clashes = await _describe_clashes(
+        session,
+        term_code=draft.term_code,
+        day_of_week=day_of_week,
+        period=period,
+        section_id=section_id,
+        faculty_user_id=faculty_user_id,
+        venue_id=venue_id,
+        own_draft_id=draft_id,
+    )
+    if clashes:
+        raise HTTPException(status_code=409, detail={"clashes": clashes})
+
+    headcount = await onboarding_service.section_headcount(session, section_id)
+    warnings: list[str] = []
+    if headcount > venue.capacity:
+        warning = (
+            f"{section.name} has {headcount} students but {venue.code} seats "
+            f"{venue.capacity}."
+        )
+        if not acknowledge_capacity:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{warning} Re-submit with acknowledge_capacity to proceed.",
+            )
+        warnings.append(warning)
+
+    entry = TimetableEntry(
+        draft_id=draft_id,
+        section_id=section_id,
+        day_of_week=day_of_week,
+        period_id=period_id,
+        offering_id=offering_id,
+        faculty_user_id=faculty_user_id,
+        venue_id=venue_id,
+    )
+    session.add(entry)
+    await session.flush()
+    # Approvals reset: a Department that already signed off has not seen this.
+    await _reset_approvals(session, draft_id)
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.entry.added",
+        object_type="timetable_entry",
+        object_id=str(entry.id),
+        scope=section.path,
+        after={
+            "subject": subject.code,
+            "day_of_week": day_of_week,
+            "period": period.name,
+            "venue": venue.code,
+            "capacity_warning": warnings or None,
+        },
+    )
+    await session.commit()
+    return {"entry": entry, "warnings": warnings}
+
+
+async def remove_entry(
+    session: AsyncSession, ctx: AuthContext, entry_id: uuid.UUID
+) -> None:
+    entry = await dao.get_entry(session, entry_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Timetable entry not found.")
+    await _require_open_draft(session, entry.draft_id)
+    await session.delete(entry)
+    await _reset_approvals(session, entry.draft_id)
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.entry.removed",
+        object_type="timetable_entry",
+        object_id=str(entry_id),
+        before={"section_id": str(entry.section_id), "day_of_week": entry.day_of_week},
+    )
+    await session.commit()
+
+
+async def _describe_clashes(
+    session: AsyncSession,
+    *,
+    term_code: str,
+    day_of_week: int,
+    period: Period,
+    section_id: uuid.UUID,
+    faculty_user_id: uuid.UUID,
+    venue_id: uuid.UUID,
+    exclude_entry_id: uuid.UUID | None = None,
+    own_draft_id: uuid.UUID | None = None,
+) -> list[dict[str, object]]:
+    """Turn raw clash rows into sentences naming what collides and where.
+
+    `own_draft_id` only affects wording: a collision inside the timetable being
+    edited reads differently from one against someone else's work, and telling
+    an author their own entry is "on another draft" sends them looking in the
+    wrong place.
+    """
+    rows = await dao.find_clashes(
+        session,
+        term_code=term_code,
+        day_of_week=day_of_week,
+        start_time=period.start_time,
+        end_time=period.end_time,
+        section_id=section_id,
+        faculty_user_id=faculty_user_id,
+        venue_id=venue_id,
+        exclude_entry_id=exclude_entry_id,
+    )
+    described: list[dict[str, object]] = []
+    for row in rows:
+        if row.faculty_user_id == faculty_user_id:
+            kind, subject = "faculty", "This Faculty Member"
+        elif row.venue_id == venue_id:
+            kind, subject = "venue", "This venue"
+        else:
+            kind, subject = "section", "This Section"
+        other = await org_service.get_unit(session, row.section_id)
+        described.append(
+            {
+                "kind": kind,
+                "entry_id": str(row.entry_id),
+                "section": other.name,
+                "period": row.period_name,
+                "draft_status": row.draft_status,
+                "message": (
+                    f"{subject} is already booked for {other.name} in "
+                    f"{row.period_name} ({row.start_time:%H:%M}–{row.end_time:%H:%M})"
+                    + (
+                        " in this timetable."
+                        if row.draft_id == own_draft_id
+                        else " on a published timetable."
+                        if row.draft_status == "published"
+                        else " on another School's draft."
+                    )
+                ),
+            }
+        )
+    return described
+
+
+# --- approvals and publish (TTM-FR-08/09) -------------------------------------
+
+
+async def _departments_in_draft(
+    session: AsyncSession, draft_id: uuid.UUID
+) -> dict[uuid.UUID, str]:
+    """Departments whose Sections appear in the draft — the set that must sign off."""
+    departments: dict[uuid.UUID, str] = {}
+    for entry, _period in await dao.list_entries(session, draft_id):
+        department_id = await org_service.ancestor_of_type(
+            session, entry.section_id, "department"
+        )
+        if department_id is not None and department_id not in departments:
+            departments[department_id] = (
+                await org_service.get_unit(session, department_id)
+            ).name
+    return departments
+
+
+async def _reset_approvals(session: AsyncSession, draft_id: uuid.UUID) -> None:
+    """Any edit invalidates sign-off: an HoD approved a timetable that no longer
+    exists, so their decision cannot carry forward to a different one."""
+    for approval in await dao.list_approvals(session, draft_id):
+        if approval.status != "pending":
+            approval.status = "pending"
+            approval.decided_by = None
+            approval.decided_at = None
+            approval.reason = None
+
+
+async def draft_status(session: AsyncSession, draft_id: uuid.UUID) -> dict[str, object]:
+    """Everything that stands between this draft and publishing."""
+    draft = await dao.get_draft(session, draft_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="Timetable draft not found.")
+    departments = await _departments_in_draft(session, draft_id)
+    decisions = {a.department_id: a for a in await dao.list_approvals(session, draft_id)}
+
+    approvals = [
+        {
+            "department_id": department_id,
+            "department_name": name,
+            "status": decisions[department_id].status
+            if department_id in decisions
+            else "pending",
+            "reason": decisions[department_id].reason if department_id in decisions else None,
+        }
+        for department_id, name in sorted(departments.items(), key=lambda kv: kv[1])
+    ]
+    entries = await dao.list_entries(session, draft_id)
+    outstanding = [a for a in approvals if a["status"] != "approved"]
+    return {
+        "draft_id": draft.id,
+        "school_id": draft.school_id,
+        "term_code": draft.term_code,
+        "version": draft.version,
+        "status": draft.status,
+        "entry_count": len(entries),
+        "approvals": approvals,
+        "publishable": draft.status == "draft" and bool(entries) and not outstanding,
+        "blocking": (
+            []
+            if draft.status != "draft"
+            else ([] if entries else ["the draft has no entries"])
+            + [f"{a['department_name']} has not approved" for a in outstanding]
+        ),
+    }
+
+
+async def decide_approval(
+    session: AsyncSession,
+    ctx: AuthContext,
+    draft_id: uuid.UUID,
+    department_id: uuid.UUID,
+    approve: bool,
+    reason: str | None = None,
+) -> TimetableApproval:
+    """An HoD signs off (or rejects) the portion of a draft touching their Department."""
+    await _require_open_draft(session, draft_id)
+    departments = await _departments_in_draft(session, draft_id)
+    if department_id not in departments:
+        raise HTTPException(
+            status_code=422,
+            detail="That Department has no Sections in this timetable, so it has "
+            "nothing to approve.",
+        )
+    await rbac_service.ensure_scope_covers(
+        session, ctx, ("hod", "school-incharge", "system-admin", "super-admin"), department_id
+    )
+    if not approve and not reason:
+        raise HTTPException(status_code=422, detail="Rejecting requires a reason.")
+
+    approval = await dao.find_approval(session, draft_id, department_id)
+    if approval is None:
+        approval = TimetableApproval(draft_id=draft_id, department_id=department_id)
+        session.add(approval)
+    approval.status = "approved" if approve else "rejected"
+    approval.decided_by = ctx.user_id
+    approval.decided_at = datetime.now(UTC)
+    approval.reason = reason
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.draft.approved" if approve else "ttm.draft.rejected",
+        object_type="timetable_draft",
+        object_id=str(draft_id),
+        after={"department": departments[department_id], "reason": reason},
+    )
+    await session.commit()
+    return approval
+
+
+async def publish_draft(
+    session: AsyncSession, ctx: AuthContext, draft_id: uuid.UUID
+) -> TimetableDraft:
+    """Make the draft the term's source of truth for this School (TTM-FR-09).
+
+    Blocked while any covered Department has not approved, or the draft is
+    empty. Clashes cannot exist here — they are refused at save time — but the
+    check is repeated because another School may have published into a shared
+    room since this draft was last touched.
+    """
+    draft = await _require_open_draft(session, draft_id)
+    state = await draft_status(session, draft_id)
+    if not state["publishable"]:
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot publish: " + "; ".join(cast(list[str], state["blocking"])) + ".",
+        )
+
+    for entry, period in await dao.list_entries(session, draft_id):
+        clashes = await _describe_clashes(
+            session,
+            term_code=draft.term_code,
+            day_of_week=entry.day_of_week,
+            period=period,
+            section_id=entry.section_id,
+            faculty_user_id=entry.faculty_user_id,
+            venue_id=entry.venue_id,
+            exclude_entry_id=entry.id,
+            own_draft_id=draft_id,
+        )
+        # Own-draft rows are not conflicts with themselves; anything else is a
+        # collision that appeared while this draft sat waiting for approval.
+        external = [c for c in clashes if c["entry_id"] != str(entry.id)]
+        if external:
+            raise HTTPException(status_code=409, detail={"clashes": external})
+
+    previous = await dao.published_draft(session, draft.school_id, draft.term_code)
+    if previous is not None:
+        previous.status = "superseded"
+    draft.status = "published"
+    draft.published_by = ctx.user_id
+    draft.published_at = datetime.now(UTC)
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.draft.published",
+        object_type="timetable_draft",
+        object_id=str(draft.id),
+        after={
+            "term_code": draft.term_code,
+            "version": draft.version,
+            "entries": state["entry_count"],
+            "superseded": str(previous.id) if previous else None,
+        },
+    )
+    await session.commit()
+    get_logger().info(
+        "timetable published",
+        school_id=str(draft.school_id),
+        term_code=draft.term_code,
+        version=draft.version,
+        entries=state["entry_count"],
+    )
+    return draft
+
+
+async def timetable_view(
+    session: AsyncSession, draft_id: uuid.UUID
+) -> list[dict[str, object]]:
+    """The grid as rows: what is taught, by whom, where, when."""
+    rows: list[dict[str, object]] = []
+    for entry, period in await dao.list_entries(session, draft_id):
+        section = await org_service.get_unit(session, entry.section_id)
+        offering = await org_service.get_offering(session, entry.offering_id)
+        subject = await org_service.get_subject(session, offering.subject_id)
+        venue = await org_service.get_venue(session, entry.venue_id)
+        faculty = await user_service.get_user(session, entry.faculty_user_id)
+        rows.append(
+            {
+                "entry_id": entry.id,
+                "section_id": entry.section_id,
+                "section_name": section.name,
+                "day_of_week": entry.day_of_week,
+                "period_name": period.name,
+                "start_time": period.start_time,
+                "end_time": period.end_time,
+                "subject_code": subject.code,
+                "subject_name": subject.name,
+                "faculty_user_id": entry.faculty_user_id,
+                "faculty_name": faculty.full_name,
+                "venue_code": venue.code,
+            }
+        )
+    return rows

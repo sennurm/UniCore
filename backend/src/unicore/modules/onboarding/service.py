@@ -697,6 +697,13 @@ async def positions_in_programme(
     return set(await dao.count_students_by_position(session, program_id))
 
 
+async def section_headcount(
+    session: AsyncSession, section_id: uuid.UUID, as_of: date | None = None
+) -> int:
+    """Students in a Section on a date — TTM compares this to a venue's capacity."""
+    return len(await dao.section_roster_as_of(session, section_id, as_of or date.today()))
+
+
 async def headcount_by_position(
     session: AsyncSession, program_id: uuid.UUID
 ) -> dict[int, int]:

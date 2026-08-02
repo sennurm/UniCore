@@ -126,7 +126,12 @@ async def db(database: None) -> AsyncIterator[None]:
                 "TRUNCATE org_units, users, audit_events, grants, otp_challenges, "
                 "devices, device_change_requests, consent_records, grievances, "
                 "domain_events, academic_terms, import_runs, import_row_errors, "
-                "student_profiles, section_memberships, batches CASCADE"
+                "student_profiles, section_memberships, batches, "
+                # Master data and timetable tables: a venue or subject surviving
+                # into the next test collides on its unique code.
+                "subjects, subject_offerings, student_elective_choices, venues, "
+                "staff_profiles, period_grids, periods, timetable_drafts, "
+                "timetable_entries, timetable_approvals CASCADE"
             )
         )
         # University settings are configuration, not per-test data: restore the
@@ -248,6 +253,7 @@ async def campus(make_client: Callable[..., httpx.AsyncClient]) -> dict[str, str
 
     return {
         "university": uni["id"],
+        "faculty_division": fd["id"],
         "school": school["id"],
         "department": dept["id"],
         "program": program["id"],
