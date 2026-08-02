@@ -912,27 +912,60 @@ async def update_subject(
 
 
 async def create_offering(
-    session: AsyncSession, ctx: AuthContext, subject_id: uuid.UUID, program_id: uuid.UUID,
-    position: int, capacity: int | None = None,
+    session: AsyncSession, ctx: AuthContext, subject_id: uuid.UUID,
+    program_id: uuid.UUID | None, position: int | None, capacity: int | None = None,
 ) -> SubjectOffering:
-    """Place a subject at (Programme, position). Idempotent — re-offering the
-    same subject at the same position returns the existing row."""
+    """Place a subject, either at (Programme, position) or university-wide.
+
+    An **Open** elective is common to the whole university (locked 02-08-2026),
+    so it is offered once with no Programme and no position rather than once per
+    Programme — 113 rows that would immediately drift apart. Idempotent either
+    way: re-offering the same thing returns the existing row.
+    """
     subject = await dao.get_subject(session, subject_id)
     if subject is None:
         raise HTTPException(status_code=404, detail="Subject not found.")
-    programme = await _get_or_404(session, program_id)
-    if programme.type != "program":
-        raise HTTPException(
-            status_code=422, detail=f"Subjects are offered to a Programme, not a {programme.type}."
-        )
 
-    cadence = await effective_cadence(session, programme)
-    ladder = position_ladder(cadence, programme.duration_years)
-    if ladder and position not in ladder:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Position {position} is outside 1..{ladder[-1]} for '{programme.code}'.",
-        )
+    university_wide = program_id is None
+    if university_wide:
+        if position is not None:
+            raise HTTPException(
+                status_code=422,
+                detail="A university-wide offering has no ladder position — it is open to "
+                "any student in any term.",
+            )
+        if subject.elective_group != "open":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Only Open electives are university-wide; '{subject.code}' is "
+                f"{subject.kind}"
+                + (f"/{subject.elective_group}" if subject.elective_group else "")
+                + " and must name a Programme.",
+            )
+    else:
+        if position is None:
+            raise HTTPException(
+                status_code=422, detail="A Programme-bound offering needs a ladder position."
+            )
+        programme = await _get_or_404(session, cast(uuid.UUID, program_id))
+        if programme.type != "program":
+            raise HTTPException(
+                status_code=422,
+                detail=f"Subjects are offered to a Programme, not a {programme.type}.",
+            )
+        if subject.elective_group == "open":
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{subject.code}' is an Open elective — it is offered university-wide, "
+                "not to a single Programme.",
+            )
+        cadence = await effective_cadence(session, programme)
+        ladder = position_ladder(cadence, programme.duration_years)
+        if ladder and position not in ladder:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Position {position} is outside 1..{ladder[-1]} for '{programme.code}'.",
+            )
 
     existing = await dao.find_offering(session, subject_id, program_id, position)
     if existing is not None:
@@ -949,8 +982,11 @@ async def create_offering(
         action="org.offering.created",
         object_type="subject_offering",
         object_id=str(offering.id),
-        scope=programme.path,
-        after={"subject": subject.code, "programme": programme.code, "position": position},
+        after={
+            "subject": subject.code,
+            "programme": None if university_wide else str(program_id),
+            "position": position,
+        },
     )
     await session.commit()
     return offering
@@ -1020,6 +1056,18 @@ async def set_offering_capacity(
     )
     await session.commit()
     return offering
+
+
+async def seats_taken(
+    session: AsyncSession, offering_id: uuid.UUID, term_code: str | None
+) -> int:
+    """How many students hold this offering for a term. Works for university-wide
+    offerings, which belong to no Programme and so cannot be found by listing one."""
+    if not term_code:
+        return 0
+    return (await dao.count_offering_takers(session, [offering_id], term_code)).get(
+        offering_id, 0
+    )
 
 
 async def claim_elective_seat(
@@ -1137,21 +1185,35 @@ async def import_subjects(
             # Resolve everything the row needs BEFORE creating anything: a row
             # naming an unknown Programme must not leave an orphan subject behind.
             code = _required(row, "subject_code")
-            programme_code = _required(row, "programme_code")
-            programmes = await dao.find_by_code_in_scope(session, programme_code, "program", None)
-            if not programmes:
-                raise _OrgRowError("programme_code", f"unknown Programme '{programme_code}'")
+            programme_code = row.get("programme_code", "").strip()
             position = _whole_number(row, "position", 1, 12)
-            if position is None:
-                raise _OrgRowError("position", "required — where the subject is taught")
+
+            # Blank Programme means university-wide, which only an Open elective
+            # may be. Everything is resolved before anything is created so a bad
+            # row cannot leave an orphan subject behind.
+            program_id: uuid.UUID | None = None
+            if programme_code:
+                programmes = await dao.find_by_code_in_scope(
+                    session, programme_code, "program", None
+                )
+                if not programmes:
+                    raise _OrgRowError("programme_code", f"unknown Programme '{programme_code}'")
+                program_id = programmes[0].id
+                if position is None:
+                    raise _OrgRowError("position", "required — where the subject is taught")
+            elif position is not None:
+                raise _OrgRowError(
+                    "position",
+                    "a university-wide (Open) offering has no position — leave it blank",
+                )
 
             subject = await dao.get_subject_by_code(session, code)
             if subject is None:
                 subject = await _subject_from_row(session, ctx, row, code)
                 subjects_created += 1
 
-            before = await dao.find_offering(session, subject.id, programmes[0].id, position)
-            await create_offering(session, ctx, subject.id, programmes[0].id, position)
+            before = await dao.find_offering(session, subject.id, program_id, position)
+            await create_offering(session, ctx, subject.id, program_id, position)
             if before is None:
                 offerings_created += 1
             else:

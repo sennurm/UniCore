@@ -253,10 +253,7 @@ async def set_offering_capacity(
         session, ctx, offering_id, payload.capacity, term_code
     )
     subject = await service.get_subject(session, offering.subject_id)
-    taken = await service.list_offerings(
-        session, offering.program_id, offering.position, term_code=term_code
-    )
-    seats = next((r["seats_taken"] for r in taken if r["id"] == offering.id), 0)
+    seats = await service.seats_taken(session, offering.id, term_code)
     return OfferingOut.model_validate(
         {
             "id": offering.id,

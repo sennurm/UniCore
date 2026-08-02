@@ -188,20 +188,27 @@ class Subject(Base):
 
 
 class SubjectOffering(Base):
-    """Where a subject is taught: (subject, Programme, ladder position)."""
+    """Where a subject is taught.
+
+    Either **Programme-bound** — (subject, Programme, position) — or
+    **university-wide**, with both NULL, which is how an Open elective is
+    offered: common to the whole university, choosable by any student in any
+    term. Uniqueness is two partial indexes rather than one constraint, because
+    Postgres treats NULLs as distinct and would admit the same open subject
+    twice (see migration 0015)."""
 
     __tablename__ = "subject_offerings"
-    __table_args__ = (
-        UniqueConstraint(
-            "subject_id", "program_id", "position", name="uq_offering_subject_program_position"
-        ),
-        Index("ix_offerings_program_position", "program_id", "position"),
-    )
+    __table_args__ = (Index("ix_offerings_program_position", "program_id", "position"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     subject_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("subjects.id"), nullable=False)
-    program_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
-    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    # NULL on both = university-wide: an Open elective is common to the whole
+    # university, so it has no owning Programme and no ladder position. Either
+    # both are set (Programme-bound) or neither is (open to everyone).
+    program_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("org_units.id"), nullable=True
+    )
+    position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Seats available when students choose this elective (TTM-FR-14). NULL is
     # unlimited — a limit is an explicit decision, never a default.
     capacity: Mapped[int | None] = mapped_column(Integer, nullable=True)

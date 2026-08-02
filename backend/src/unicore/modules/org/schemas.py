@@ -317,9 +317,12 @@ class SubjectOut(BaseModel):
 
 
 class OfferingCreate(BaseModel):
+    """Programme-bound, or university-wide when both program_id and position are
+    omitted — which is how an Open elective is offered."""
+
     subject_id: uuid.UUID
-    program_id: uuid.UUID
-    position: int = Field(ge=1, le=12)
+    program_id: uuid.UUID | None = None
+    position: int | None = Field(default=None, ge=1, le=12)
     # Electives only: how many students may choose it. None = unlimited.
     capacity: int | None = Field(default=None, ge=1, le=2000)
 
@@ -331,8 +334,8 @@ class OfferingUpdate(BaseModel):
 class OfferingOut(BaseModel):
     id: uuid.UUID
     subject_id: uuid.UUID
-    program_id: uuid.UUID
-    position: int
+    program_id: uuid.UUID | None
+    position: int | None
     capacity: int | None
     seats_taken: int = 0
     status: str
@@ -436,6 +439,8 @@ register(
                 "position": "5",
             },
             {
+                # An OPEN elective is common to the whole university: leave
+                # programme_code and position blank, and give it ONE row.
                 "subject_code": "OE201",
                 "subject_name": "Indian Constitution",
                 "department_code": "HUM",
@@ -444,8 +449,8 @@ register(
                 "credits": "2",
                 "theory_hours": "2",
                 "lab_hours": "0",
-                "programme_code": "BT-CSE",
-                "position": "3",
+                "programme_code": "",
+                "position": "",
             },
         ),
         notes=(
@@ -462,6 +467,13 @@ register(
             "Students choose exactly one subject within each elective group they "
             "are offered for a term, so two electives in the same group at the "
             "same position are alternatives, not both taught to one student.",
+            "OPEN electives are UNIVERSITY-WIDE: give one row with programme_code "
+            "and position both BLANK, and every student may choose it in any "
+            "term. Do not repeat an open elective per Programme — one row is the "
+            "whole university. General and Professional electives are "
+            "discipline-specific and must name a programme_code and position.",
+            "An open elective's capacity is one shared pool for the whole "
+            "university, not per Programme.",
             "position is the ladder position the subject is taught at — the "
             "semester number for a semester-cadence Programme, the year number "
             "for a yearly one.",

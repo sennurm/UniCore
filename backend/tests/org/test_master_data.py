@@ -335,7 +335,8 @@ async def test_staff_import_is_idempotent(make_client, campus) -> None:
 
 
 async def _elective_setup(admin: httpx.AsyncClient, campus: dict) -> dict[str, str]:
-    """Two professional electives and one open elective at position 1."""
+    """Two Programme-bound professional electives, plus one Open elective —
+    which is university-wide, so it is offered once with no Programme."""
     await admin.put(f"/org/units/{campus['program']}", json={"duration_years": 4})
     offerings = {}
     for code, name, group in (
@@ -352,17 +353,12 @@ async def _elective_setup(admin: httpx.AsyncClient, campus: dict) -> dict[str, s
                 },
             )
         ).json()
-        offering = (
-            await admin.post(
-                "/org/offerings",
-                json={
-                    "subject_id": subject["id"],
-                    "program_id": campus["program"],
-                    "position": 1,
-                },
-            )
-        ).json()
-        offerings[code] = offering["id"]
+        body: dict[str, object] = {"subject_id": subject["id"]}
+        if group != "open":
+            body |= {"program_id": campus["program"], "position": 1}
+        created = await admin.post("/org/offerings", json=body)
+        assert created.status_code == 201, created.text
+        offerings[code] = created.json()["id"]
     return offerings
 
 
@@ -650,3 +646,230 @@ async def test_offering_row_lock_serialises_concurrent_seat_claims(
         await second.rollback()  # the cancelled statement left the tx unusable
         assert await org_dao.lock_offering(second, offering_id) is not None
         await second.commit()
+
+
+# --- Open electives are university-wide ---------------------------------------
+
+
+async def _open_subject(admin: httpx.AsyncClient, campus: dict, code: str = "OE301") -> dict:
+    return (
+        await admin.post(
+            "/org/subjects",
+            json={
+                "code": code,
+                "name": "Environmental Studies",
+                "department_id": campus["department"],
+                "kind": "elective",
+                "elective_group": "open",
+                "credits": 2,
+            },
+        )
+    ).json()
+
+
+async def test_open_elective_is_offered_once_for_the_whole_university(
+    make_client, campus
+) -> None:
+    """The point of university-wide scope: one offering, not one per Programme."""
+    async with make_client("super-admin") as admin:
+        subject = await _open_subject(admin, campus)
+        offered = await admin.post("/org/offerings", json={"subject_id": subject["id"]})
+        assert offered.status_code == 201, offered.text
+        assert offered.json()["program_id"] is None
+        assert offered.json()["position"] is None
+
+        # It appears in every Programme's curriculum without being duplicated.
+        mine = (await admin.get(f"/org/programmes/{campus['program']}/offerings")).json()
+        theirs = (await admin.get(f"/org/programmes/{campus['other_program']}/offerings")).json()
+    assert "OE301" in [o["subject"]["code"] for o in mine]
+    assert "OE301" in [o["subject"]["code"] for o in theirs]
+    ids = {o["id"] for o in mine + theirs if o["subject"]["code"] == "OE301"}
+    assert len(ids) == 1, "the open elective was duplicated per Programme"
+
+
+async def test_open_elective_cannot_be_bound_to_one_programme(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        subject = await _open_subject(admin, campus)
+        bound = await admin.post(
+            "/org/offerings",
+            json={
+                "subject_id": subject["id"],
+                "program_id": campus["program"],
+                "position": 1,
+            },
+        )
+    assert bound.status_code == 422
+    assert "offered university-wide" in bound.json()["detail"]
+
+
+async def test_only_open_electives_may_be_university_wide(make_client, campus) -> None:
+    """General and Professional electives are discipline-specific by definition."""
+    async with make_client("super-admin") as admin:
+        professional = (
+            await admin.post(
+                "/org/subjects",
+                json={
+                    "code": "CS601", "name": "Deep Learning",
+                    "department_id": campus["department"], "kind": "elective",
+                    "elective_group": "professional", "credits": 3,
+                },
+            )
+        ).json()
+        core = await _subject(admin, campus)
+
+        for subject in (professional, core):
+            refused = await admin.post("/org/offerings", json={"subject_id": subject["id"]})
+            assert refused.status_code == 422, subject["code"]
+            assert "must name a Programme" in refused.json()["detail"]
+
+
+async def test_open_elective_is_offered_once_not_per_position(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        subject = await _open_subject(admin, campus)
+        await admin.post("/org/offerings", json={"subject_id": subject["id"]})
+        again = await admin.post("/org/offerings", json={"subject_id": subject["id"]})
+        with_position = await admin.post(
+            "/org/offerings", json={"subject_id": subject["id"], "position": 3}
+        )
+        listed = (await admin.get(f"/org/programmes/{campus['program']}/offerings")).json()
+    assert len([o for o in listed if o["subject"]["code"] == "OE301"]) == 1, "duplicated"
+    assert again.status_code == 201  # idempotent
+    assert with_position.status_code == 422
+    assert "no ladder position" in with_position.json()["detail"]
+
+
+async def test_students_of_any_programme_and_position_can_choose_an_open_elective(
+    make_client, campus
+) -> None:
+    """Two students in different Programmes at different positions both see it."""
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+        await admin.put(f"/org/units/{campus['other_program']}", json={"duration_years": 4})
+        await _student(admin, 1)
+        # A student of the *other* Programme, sitting at a different position.
+        await admin.post(
+            "/onboarding/imports",
+            data={"term_code": "2026-S1"},
+            files={
+                "file": (
+                    "i.csv",
+                    csv_bytes(
+                        [
+                            student_row(
+                                2,
+                                program_code="BT-MECH",
+                                section_label="1A",
+                                position="3",
+                            )
+                        ]
+                    ),
+                    "text/csv",
+                )
+            },
+        )
+
+    for username in (_username(1), _username(2)):
+        async with make_client("student", user_id=username) as student:
+            groups = (
+                await student.get("/onboarding/me/electives", params={"term_code": "2026-S1"})
+            ).json()
+            open_group = next((g for g in groups if g["elective_group"] == "open"), None)
+            assert open_group is not None, f"{username} cannot see the open elective"
+            assert [o["subject_code"] for o in open_group["options"]] == ["OE201"]
+
+            picked = await student.post(
+                "/onboarding/me/electives",
+                json={"offering_id": offerings["OE201"], "term_code": "2026-S1"},
+            )
+            assert picked.status_code == 201, picked.text
+
+
+async def test_open_elective_capacity_is_shared_across_the_university(
+    make_client, campus
+) -> None:
+    """One offering means one seat pool — the whole university competes for it."""
+    async with make_client("super-admin") as admin:
+        offerings = await _elective_setup(admin, campus)
+        await admin.put(f"/org/offerings/{offerings['OE201']}", json={"capacity": 1})
+        await admin.put(f"/org/units/{campus['other_program']}", json={"duration_years": 4})
+        await _student(admin, 1)
+        await admin.post(
+            "/onboarding/imports",
+            data={"term_code": "2026-S1"},
+            files={
+                "file": (
+                    "i.csv",
+                    csv_bytes(
+                        [student_row(2, program_code="BT-MECH", section_label="1A")]
+                    ),
+                    "text/csv",
+                )
+            },
+        )
+
+    async with make_client("student", user_id=_username(1)) as first:
+        taken = await first.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["OE201"], "term_code": "2026-S1"},
+        )
+    async with make_client("student", user_id=_username(2)) as second:
+        refused = await second.post(
+            "/onboarding/me/electives",
+            json={"offering_id": offerings["OE201"], "term_code": "2026-S1"},
+        )
+    assert taken.status_code == 201
+    assert refused.status_code == 409, "a student in another Programme bypassed the seat limit"
+
+
+async def test_subject_import_places_an_open_elective_university_wide(
+    make_client, campus
+) -> None:
+    """The template ships a row with programme_code and position blank; the
+    importer has to accept exactly that."""
+    from unicore.modules.org.schemas import SUBJECT_CSV_COLUMNS
+
+    rows = [
+        {
+            "subject_code": "OE201", "subject_name": "Indian Constitution",
+            "department_code": "CSE", "kind": "elective", "elective_group": "open",
+            "credits": "2", "theory_hours": "2", "lab_hours": "0",
+            "programme_code": "", "position": "",
+        },
+        {  # an open elective given a position — rejected, not silently accepted
+            "subject_code": "OE202", "subject_name": "Ethics",
+            "department_code": "CSE", "kind": "elective", "elective_group": "open",
+            "credits": "2", "theory_hours": "2", "lab_hours": "0",
+            "programme_code": "", "position": "3",
+        },
+    ]
+    header = ",".join(SUBJECT_CSV_COLUMNS)
+    body = "\n".join(
+        [header] + [",".join(r.get(c, "") for c in SUBJECT_CSV_COLUMNS) for r in rows]
+    )
+
+    async with make_client("super-admin") as admin:
+        result = (
+            await admin.post(
+                "/org/subjects/imports",
+                files={"file": ("subjects.csv", body.encode(), "text/csv")},
+            )
+        ).json()
+        listed = (await admin.get(f"/org/programmes/{campus['program']}/offerings")).json()
+    assert result["offerings_created"] == 1, result
+    assert result["rows_rejected"] == 1
+    assert result["errors"][0]["field"] == "position"
+    open_rows = [o for o in listed if o["subject"]["code"] == "OE201"]
+    assert len(open_rows) == 1 and open_rows[0]["program_id"] is None
+
+
+async def test_downloaded_subject_template_uploads_back(make_client, campus) -> None:
+    """Its sample rows name Programmes that do not exist here, so they reject —
+    but the open-elective row must parse rather than fail on a blank Programme."""
+    async with make_client("super-admin") as admin:
+        template = await admin.get("/templates/subjects.csv")
+        result = await admin.post(
+            "/org/subjects/imports",
+            files={"file": ("t.csv", template.text.encode(), "text/csv")},
+        )
+    assert result.status_code == 200, result.text
+    assert result.json()["rows_total"] == 4

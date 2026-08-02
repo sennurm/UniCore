@@ -227,15 +227,19 @@ async def list_subjects(
 
 
 async def find_offering(
-    session: AsyncSession, subject_id: uuid.UUID, program_id: uuid.UUID, position: int
+    session: AsyncSession,
+    subject_id: uuid.UUID,
+    program_id: uuid.UUID | None,
+    position: int | None,
 ) -> SubjectOffering | None:
-    result = await session.execute(
-        select(SubjectOffering).where(
-            SubjectOffering.subject_id == subject_id,
-            SubjectOffering.program_id == program_id,
-            SubjectOffering.position == position,
+    query = select(SubjectOffering).where(SubjectOffering.subject_id == subject_id)
+    if program_id is None:
+        query = query.where(SubjectOffering.program_id.is_(None))
+    else:
+        query = query.where(
+            SubjectOffering.program_id == program_id, SubjectOffering.position == position
         )
-    )
+    result = await session.execute(query)
     return result.scalar_one_or_none()
 
 
@@ -250,20 +254,25 @@ async def list_offerings(
     program_id: uuid.UUID,
     position: int | None = None,
     kind: str | None = None,
+    include_university_wide: bool = True,
 ) -> Sequence[tuple[SubjectOffering, Subject]]:
     """Offerings with their subject — the curriculum of a Programme position."""
+    # A university-wide offering (program_id NULL) belongs to every Programme's
+    # curriculum, so it is unioned in rather than filtered out — that is what
+    # makes an Open elective visible to the whole university.
+    scope = SubjectOffering.program_id == program_id
+    if include_university_wide:
+        scope = scope | SubjectOffering.program_id.is_(None)
     query = (
         select(SubjectOffering, Subject)
         .join(Subject, Subject.id == SubjectOffering.subject_id)
-        .where(
-            SubjectOffering.program_id == program_id,
-            SubjectOffering.status == "active",
-            Subject.status == "active",
-        )
+        .where(scope, SubjectOffering.status == "active", Subject.status == "active")
         .order_by(Subject.code)
     )
     if position is not None:
-        query = query.where(SubjectOffering.position == position)
+        query = query.where(
+            (SubjectOffering.position == position) | SubjectOffering.position.is_(None)
+        )
     if kind:
         query = query.where(Subject.kind == kind)
     result = await session.execute(query)

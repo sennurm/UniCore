@@ -1189,16 +1189,20 @@ async def choose_elective(
         raise HTTPException(
             status_code=422, detail=f"'{subject.code}' is a core subject — it is not chosen."
         )
-    if offering.program_id != profile.program_id:
-        raise HTTPException(
-            status_code=403, detail="That subject is not offered to your Programme."
-        )
-    if offering.position != profile.position:
-        raise HTTPException(
-            status_code=422,
-            detail=f"'{subject.code}' is taught at position {offering.position}; "
-            f"you are at {profile.position}.",
-        )
+    # A university-wide offering (program_id NULL) is an Open elective: common to
+    # the whole university, choosable by any student in any term. Only
+    # Programme-bound offerings are gated on Programme and position.
+    if offering.program_id is not None:
+        if offering.program_id != profile.program_id:
+            raise HTTPException(
+                status_code=403, detail="That subject is not offered to your Programme."
+            )
+        if offering.position != profile.position:
+            raise HTTPException(
+                status_code=422,
+                detail=f"'{subject.code}' is taught at position {offering.position}; "
+                f"you are at {profile.position}.",
+            )
 
     existing = await dao.elective_choice_for_group(
         session, profile.user_id, term_code, str(subject.elective_group)
