@@ -8,10 +8,11 @@ import { api, getToken, setToken, validateSession } from "@/lib/api";
 const NAV = [
   { num: "01", label: "Org structure", href: "/dashboard" },
   { num: "02", label: "Terms & sections", href: "/dashboard/terms" },
-  { num: "03", label: "Timetable", href: "/dashboard/timetable" },
-  { num: "04", label: "Student import", href: "/dashboard/onboarding" },
-  { num: "05", label: "Users & roles", href: "/dashboard/users" },
-  { num: "06", label: "Audit log", href: "/dashboard/audit" },
+  { num: "03", label: "Subjects & venues", href: "/dashboard/subjects" },
+  { num: "04", label: "Timetable", href: "/dashboard/timetable" },
+  { num: "05", label: "Student import", href: "/dashboard/onboarding" },
+  { num: "06", label: "Users & roles", href: "/dashboard/users" },
+  { num: "07", label: "Audit log", href: "/dashboard/audit" },
 ];
 
 type Me = { user_id: string; username: string; full_name: string; roles: string[] };

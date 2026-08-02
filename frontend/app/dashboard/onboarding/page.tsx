@@ -78,6 +78,8 @@ export default function OnboardingPage() {
   const [selected, setSelected] = useState<ImportRun | null>(null);
   const [errors, setErrors] = useState<RowError[] | null>(null);
 
+  const [staffFile, setStaffFile] = useState<File | null>(null);
+  const [staffResult, setStaffResult] = useState<ImportRun | null>(null);
   const [enrolFile, setEnrolFile] = useState<File | null>(null);
   const [enrolResult, setEnrolResult] = useState<{
     rows_assigned: number;
@@ -223,6 +225,29 @@ export default function OnboardingPage() {
       await loadRuns();
     } catch (err) {
       setError(String((err as Error).message));
+    }
+  }
+
+  async function importStaff(e: React.FormEvent) {
+    e.preventDefault();
+    if (!staffFile) return;
+    setBusy(true);
+    setError("");
+    setStaffResult(null);
+    try {
+      const form = new FormData();
+      form.append("file", staffFile);
+      const run = await upload<ImportRun>("/onboarding/staff/imports", form);
+      setStaffResult(run);
+      setMessage(
+        `Staff: ${run.rows_created} created · ${run.rows_updated} updated · ` +
+          `${run.rows_rejected} rejected`,
+      );
+      await loadRuns();
+    } catch (err) {
+      setError(String((err as Error).message));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -427,6 +452,39 @@ export default function OnboardingPage() {
       </div>
 
       <div className="card" style={{ maxWidth: 620 }}>
+        <div className="card-kicker">Staff import</div>
+        <p className="card-meta">
+          Bulk-provision teaching and office staff. The <strong>designation</strong> column grants
+          the matching role at the named Department, so 2,000 staff do not need their roles issued
+          one at a time. HoD is a singleton — a row naming a second one for a Department is
+          rejected rather than silently double-heading it.
+        </p>
+        <form onSubmit={importStaff}>
+          <div className="field">
+            <label>Staff CSV</label>
+            <input
+              className="input"
+              type="file"
+              accept=".csv,text/csv"
+              onChange={(e) => setStaffFile(e.target.files?.[0] ?? null)}
+              required
+            />
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={busy || !staffFile}>
+            {busy ? "Importing…" : "Import staff"}
+          </button>
+        </form>
+        {staffResult && staffResult.rows_rejected > 0 && (
+          <button
+            className="btn btn-ghost"
+            onClick={() => void openErrors(staffResult)}
+          >
+            View {staffResult.rows_rejected} rejected row(s)
+          </button>
+        )}
+      </div>
+
+      <div className="card" style={{ maxWidth: 620 }}>
         <div className="card-kicker">Enrollment numbers</div>
         <p className="card-meta">
           <strong>Enrollment No</strong> is the student&rsquo;s canonical identifier, but it is
@@ -479,7 +537,7 @@ export default function OnboardingPage() {
         )}
       </div>
 
-      <TemplateLinks only={["students", "enrollment-ids"]} />
+      <TemplateLinks only={["students", "staff", "enrollment-ids"]} />
 
       <div className="card">
         <div className="card-kicker">Import runs</div>
