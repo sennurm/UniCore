@@ -15,6 +15,10 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The raw `detail` from the response, when it is structured rather than a
+     *  string — timetable clashes arrive as `{clashes: [...]}`, and flattening
+     *  that to a message would lose which entries actually collided. */
+    public detail?: unknown,
   ) {
     super(message);
   }
@@ -49,14 +53,17 @@ async function assertOk(response: Response, hadToken: boolean): Promise<Response
   // 401 with a token attached = the session died. 401 without one is a
   // credential failure on a public endpoint (login/OTP) and renders inline.
   if (response.status === 401 && hadToken) handleUnauthorized();
-  let detail = response.statusText;
+  let message = response.statusText;
+  let detail: unknown;
   try {
     const data = await response.json();
-    detail = data.detail ?? data.error?.message ?? detail;
+    detail = data.detail;
+    message =
+      typeof detail === "string" ? detail : (data.error?.message ?? message);
   } catch {
     /* keep statusText */
   }
-  throw new ApiError(response.status, detail);
+  throw new ApiError(response.status, message, detail);
 }
 
 export async function api<T>(
