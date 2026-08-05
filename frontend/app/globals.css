@@ -205,3 +205,26 @@ select.input { appearance: none; }
 .org-detail-head h4 { margin: 0; }
 .org-empty { display: grid; place-items: center; min-height: 240px; text-align: center; opacity: 0.6; font-size: 13.5px; }
 .org-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 14px; }
+
+
+/* Calendar month grid — seven columns of dates, dimmed when closed and dashed
+   when a School rule (an exception or a holiday override) decided the day. */
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.cal-cell {
+  border: 1px solid var(--color-divider);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-height: 62px;
+  font-size: 12px;
+}
+.cal-date {
+  font-weight: 600;
+}
+@media (max-width: 720px) {
+  .cal-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

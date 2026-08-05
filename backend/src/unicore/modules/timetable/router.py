@@ -1,6 +1,7 @@
 """HTTP endpoints for the timetable module. No business logic here (see ARCHITECTURE.md)."""
 
 import uuid
+from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,6 +12,8 @@ from unicore.modules.rbac.service import require_permission
 from unicore.modules.timetable import service
 from unicore.modules.timetable.schemas import (
     ApprovalDecision,
+    CalendarExceptionCreate,
+    CalendarExceptionOut,
     DraftCreate,
     DraftOut,
     DraftStatusOut,
@@ -19,11 +22,15 @@ from unicore.modules.timetable.schemas import (
     GenerationPlanOut,
     GenerationRequest,
     GenerationResultOut,
+    HolidayCreate,
+    HolidayOut,
+    HolidayUpdate,
     MultiSchoolTermCreate,
     PeriodGridCreate,
     PeriodGridOut,
     PersonalTimetableOut,
     ProgrammeSectionsOut,
+    ResolvedDayOut,
     SchoolTermResult,
     SectionCreate,
     SectionOut,
@@ -31,6 +38,8 @@ from unicore.modules.timetable.schemas import (
     TermOut,
     TermParitySet,
     TimetableRowOut,
+    WorkingPatternOut,
+    WorkingPatternUpdate,
 )
 
 router = APIRouter(prefix="/timetable", tags=["timetable"])
@@ -300,3 +309,132 @@ async def publish_draft(
 ) -> DraftOut:
     """Make this the term's source of truth for the School."""
     return DraftOut.model_validate(await service.publish_draft(session, ctx, draft_id))
+
+
+# --- calendar (TTM-FR-26/27/28) ----------------------------------------------
+
+
+@router.get("/holidays", response_model=list[HolidayOut])
+async def list_holidays(
+    from_date: date | None = None,
+    to_date: date | None = None,
+    limit: int = Query(default=500, le=2000),
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-read")),
+) -> list[HolidayOut]:
+    rows = await service.list_holidays(session, from_date, to_date, limit)
+    return [HolidayOut.model_validate(r) for r in rows]
+
+
+@router.post("/holidays", response_model=HolidayOut, status_code=201)
+async def create_holiday(
+    payload: HolidayCreate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:holiday-write")),
+) -> HolidayOut:
+    """Close a date range for the university (System Admin)."""
+    return HolidayOut.model_validate(await service.create_holiday(session, ctx, payload))
+
+
+@router.put("/holidays/{holiday_id}", response_model=HolidayOut)
+async def update_holiday(
+    holiday_id: uuid.UUID,
+    payload: HolidayUpdate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:holiday-write")),
+) -> HolidayOut:
+    return HolidayOut.model_validate(
+        await service.update_holiday(session, ctx, holiday_id, payload)
+    )
+
+
+@router.post("/holidays/{holiday_id}/withdraw", response_model=HolidayOut)
+async def withdraw_holiday(
+    holiday_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:holiday-write")),
+) -> HolidayOut:
+    """Withdrawn rather than deleted — a date that used to be closed is exactly
+    what an audit asks about later."""
+    return HolidayOut.model_validate(await service.withdraw_holiday(session, ctx, holiday_id))
+
+
+@router.get("/schools/{school_id}/working-pattern", response_model=WorkingPatternOut)
+async def get_working_pattern(
+    school_id: uuid.UUID,
+    term_code: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-read")),
+) -> WorkingPatternOut:
+    days, is_default = await service.pattern_for(session, school_id, term_code)
+    return WorkingPatternOut(
+        school_id=school_id, term_code=term_code, days=days, is_default=is_default
+    )
+
+
+@router.put("/schools/{school_id}/working-pattern", response_model=WorkingPatternOut)
+async def set_working_pattern(
+    school_id: uuid.UUID,
+    payload: WorkingPatternUpdate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-write")),
+) -> WorkingPatternOut:
+    """Which weekdays this School teaches — a Nursing School may run all seven."""
+    row = await service.set_working_pattern(session, ctx, school_id, payload)
+    return WorkingPatternOut(
+        school_id=school_id, term_code=row.term_code, days=row.days, is_default=False
+    )
+
+
+@router.get("/schools/{school_id}/calendar", response_model=list[ResolvedDayOut])
+async def resolve_calendar(
+    school_id: uuid.UUID,
+    from_date: date,
+    to_date: date,
+    term_code: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-read")),
+) -> list[ResolvedDayOut]:
+    """The resolved teaching days for a School — the range form ATT, LVE and TSK
+    read, each answer naming the layer that decided it."""
+    rows = await service.resolve_days(session, school_id, from_date, to_date, term_code)
+    return [ResolvedDayOut.model_validate(r) for r in rows]
+
+
+@router.get("/schools/{school_id}/exceptions", response_model=list[CalendarExceptionOut])
+async def list_exceptions(
+    school_id: uuid.UUID,
+    from_date: date,
+    to_date: date,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-read")),
+) -> list[CalendarExceptionOut]:
+    rows = await service.list_calendar_exceptions(session, school_id, from_date, to_date)
+    return [CalendarExceptionOut.model_validate(r) for r in rows]
+
+
+@router.post(
+    "/schools/{school_id}/exceptions", response_model=CalendarExceptionOut, status_code=201
+)
+async def add_exception(
+    school_id: uuid.UUID,
+    payload: CalendarExceptionCreate,
+    term_code: str | None = None,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-write")),
+) -> CalendarExceptionOut:
+    """A closed day, or a day worked anyway — including a compensatory day that
+    follows another weekday's timetable."""
+    return CalendarExceptionOut.model_validate(
+        await service.add_calendar_exception(session, ctx, school_id, payload, term_code)
+    )
+
+
+@router.delete("/schools/{school_id}/exceptions/{on_date}", status_code=204)
+async def remove_exception(
+    school_id: uuid.UUID,
+    on_date: date,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("ttm:calendar-write")),
+) -> None:
+    await service.remove_calendar_exception(session, ctx, school_id, on_date)

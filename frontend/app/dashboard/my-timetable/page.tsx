@@ -23,13 +23,8 @@ type Personal = {
 };
 type Term = { term_code: string; status: string };
 
-const DAYS = [
-  { n: 1, label: "Monday" },
-  { n: 2, label: "Tuesday" },
-  { n: 3, label: "Wednesday" },
-  { n: 4, label: "Thursday" },
-  { n: 5, label: "Friday" },
-  { n: 6, label: "Saturday" },
+const DAY_LABELS = [
+  "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
 ];
 
 function hhmm(value: string): string {
@@ -98,6 +93,16 @@ export default function MyTimetablePage() {
     return Array.from(seen.values()).sort((a, b) => a.start.localeCompare(b.start));
   }, [personal]);
 
+  /** Monday–Saturday is the common week, but a Nursing or Medical School
+   *  teaches Sunday too — so a seventh column appears only for someone who
+   *  actually has a class on it, rather than for everyone. */
+  const days = useMemo(() => {
+    const taught = new Set((personal?.rows ?? []).map((r) => r.day_of_week));
+    return DAY_LABELS.map((label, i) => ({ n: i + 1, label })).filter(
+      (d) => d.n <= 6 || taught.has(d.n),
+    );
+  }, [personal]);
+
   const cells = useMemo(() => {
     const map = new Map<string, Row>();
     for (const row of personal?.rows ?? []) map.set(`${row.day_of_week}:${row.period_name}`, row);
@@ -162,7 +167,7 @@ export default function MyTimetablePage() {
             <thead>
               <tr>
                 <th style={{ width: 130 }}>Period</th>
-                {DAYS.map((d) => (
+                {days.map((d) => (
                   <th key={d.n}>{d.label}</th>
                 ))}
               </tr>
@@ -176,7 +181,7 @@ export default function MyTimetablePage() {
                       {hhmm(period.start)}–{hhmm(period.end)}
                     </div>
                   </td>
-                  {DAYS.map((day) => {
+                  {days.map((day) => {
                     const cell = cells.get(`${day.n}:${period.name}`);
                     return (
                       <td key={day.n} style={{ verticalAlign: "top" }}>

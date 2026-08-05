@@ -131,7 +131,8 @@ async def db(database: None) -> AsyncIterator[None]:
                 # into the next test collides on its unique code.
                 "subjects, subject_offerings, student_elective_choices, venues, "
                 "staff_profiles, period_grids, periods, timetable_drafts, "
-                "timetable_entries, timetable_approvals CASCADE"
+                "timetable_entries, timetable_approvals, university_holidays, "
+                "school_working_patterns, school_calendar_exceptions CASCADE"
             )
         )
         # University settings are configuration, not per-test data: restore the

@@ -178,6 +178,62 @@ async def approve_terms(
     return {f"term_{k}": v for k, v in terms.items()}
 
 
+async def declare_working_days(
+    admin: httpx.AsyncClient, make_client: Callable[..., httpx.AsyncClient], ids: dict[str, str]
+) -> None:
+    """Each School says which weekdays it teaches (TTM-FR-27).
+
+    Engineering runs Monday–Saturday with alternate Saturdays; Nursing runs all
+    seven, because clinical postings do not stop at the weekend. This is the
+    difference a campus-scoped calendar could not express.
+    """
+    for school, days in (
+        ("SOCE", {"1": True, "2": True, "3": True, "4": True, "5": True, "6": [1, 3]}),
+        ("SONUR", {str(n): True for n in range(1, 8)}),
+    ):
+        # The School Incharge owns their School's week, so it is set as one —
+        # a stage that only passes as super-admin hides a missing grant.
+        async with make_client("super-admin", user_id="school.incharge") as incharge:
+            saved = await incharge.put(
+                f"/timetable/schools/{ids[f'school_{school}']}/working-pattern",
+                json={"days": days},
+            )
+            assert saved.status_code == 200, saved.text
+
+
+async def declare_holidays(
+    admin: httpx.AsyncClient, make_client: Callable[..., httpx.AsyncClient], ids: dict[str, str]
+) -> None:
+    """A university holiday the Nursing School works through anyway."""
+    holiday = await _post(
+        admin,
+        "/timetable/holidays",
+        {
+            "from_date": "2026-09-14", "to_date": "2026-09-14",
+            "label": "Founder's Day", "kind": "public",
+        },
+    )
+    assert holiday["status"] == "active"
+    async with make_client("super-admin", user_id="school.incharge") as incharge:
+        declared = await incharge.post(
+            f"/timetable/schools/{ids['school_SONUR']}/exceptions",
+            json={
+                "on_date": "2026-09-14", "working": True,
+                "reason": "Clinical postings continue — the ward does not close.",
+            },
+        )
+        assert declared.status_code == 201, declared.text
+        # A compensatory Saturday running Monday's timetable, for Engineering.
+        made_up = await incharge.post(
+            f"/timetable/schools/{ids['school_SOCE']}/exceptions",
+            json={
+                "on_date": "2026-09-19", "working": True, "follows_day_of_week": 1,
+                "reason": "Make-up day for Founder's Day",
+            },
+        )
+        assert made_up.status_code == 201, made_up.text
+
+
 async def enable_components(admin: httpx.AsyncClient, ids: dict[str, str]) -> None:
     """Each School declares what it teaches in before its subjects can carry hours."""
     wanted = {"SOCE": {"theory", "lab"}, "SONUR": {"theory", "clinical", "field_work"}}
@@ -367,6 +423,9 @@ async def build_timetables(
         ("SOCE", "BT-CSE", 3, "P1", "OE201", "EMP-9003", "CR-101"),
         ("SONUR", "BSC-NURS", 1, "P3", "NUR101", "EMP-9003", "FIELD-PHC"),
         ("SONUR", "BSC-NURS", 2, "P3", "NUR201", "EMP-9004", "CR-101"),
+        # Sunday ward duty: impossible before the School working pattern existed,
+        # and still refused for the Engineering School next door.
+        ("SONUR", "BSC-NURS", 7, "P1", "NUR201", "EMP-9004", "FIELD-PHC"),
     ]
     for school, programme, day, period, subject, staff, venue in week:
         await _post(
@@ -412,12 +471,14 @@ async def world(make_client: Callable[..., httpx.AsyncClient]) -> AsyncIterator[
     async with make_client("super-admin") as admin:
         ids = await build_org_tree(admin)
         ids |= await approve_terms(admin, make_client, ids)
+        await declare_working_days(admin, make_client, ids)
         await enable_components(admin, ids)
         ids |= {f"staff_{k}": v for k, v in (await import_staff(admin)).items()}
         ids |= await build_catalogue(admin, ids)
         ids |= await create_venues(admin)
         ids |= await create_sections(admin, ids)
         students = await import_students(admin)
+        await declare_holidays(admin, make_client, ids)
         await choose_electives(make_client, ids)
         ids |= await build_timetables(admin, make_client, ids)
     yield {**ids, "students": students}  # type: ignore[dict-item]

@@ -64,6 +64,15 @@ ACTIONS: dict[str, tuple[str, ...]] = {
     "ttm:term-read": ("super-admin", "system-admin", "office-staff", "school-incharge",
                       "timetable-cell", "hod"),
     "ttm:section-create": ("super-admin", "system-admin", "timetable-cell"),
+    # Holidays are university master data, alongside venues and campus settings.
+    "ttm:holiday-write": ("super-admin", "system-admin"),
+    # A School's working week is a School Incharge power, like every other
+    # School-scoped decision; the scope check is in the owning service.
+    "ttm:calendar-write": ("super-admin", "system-admin", "school-incharge"),
+    # Everyone who schedules, teaches, or attends needs to know which days are
+    # working — the resolver is read by TTM, ATT, LVE and TSK alike.
+    "ttm:calendar-read": ("super-admin", "system-admin", "school-incharge", "timetable-cell",
+                          "hod", "office-staff", "faculty", "student"),
     # The Timetable Cell authors; HoDs approve their Department's portion; the
     # Cell publishes. Reading a draft is wider — faculty and students see only
     # published timetables, which is a separate read path.

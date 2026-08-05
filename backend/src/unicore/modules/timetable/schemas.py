@@ -331,3 +331,128 @@ class TimetableRowOut(BaseModel):
     faculty_user_id: uuid.UUID
     faculty_name: str
     venue_code: str
+
+
+# --- calendar (TTM-FR-26/27/28) ----------------------------------------------
+
+
+class HolidayCreate(BaseModel):
+    """A closed date range. A single-day holiday is a one-day range."""
+
+    from_date: date
+    to_date: date
+    label: str = Field(min_length=1, max_length=200)
+    kind: Literal["public", "vacation", "local"] = "public"
+    # Empty means university-wide; naming campuses limits it to those.
+    campus_codes: list[str] = Field(default_factory=list, max_length=50)
+
+    @model_validator(mode="after")
+    def _range_ordered(self) -> "HolidayCreate":
+        if self.to_date < self.from_date:
+            raise ValueError("to_date cannot be before from_date")
+        return self
+
+
+class HolidayUpdate(BaseModel):
+    from_date: date | None = None
+    to_date: date | None = None
+    label: str | None = Field(default=None, min_length=1, max_length=200)
+    kind: Literal["public", "vacation", "local"] | None = None
+    campus_codes: list[str] | None = Field(default=None, max_length=50)
+
+
+class HolidayOut(BaseModel):
+    id: uuid.UUID
+    from_date: date
+    to_date: date
+    label: str
+    kind: str
+    campus_codes: list[str]
+    status: str
+
+    model_config = {"from_attributes": True}
+
+
+class WorkingPatternUpdate(BaseModel):
+    """Which weekdays the School teaches.
+
+    `days` maps an ISO weekday ("1" = Monday) to `true` — every occurrence — or
+    to the occurrence numbers within the calendar month, so "Saturdays: 1st and
+    3rd" is `{"6": [1, 3]}`. A weekday left out is not taught.
+    """
+
+    days: dict[str, bool | list[int]]
+    # Omitted sets the School's standing pattern; supplying a term overrides it
+    # for that term alone.
+    term_code: str | None = Field(default=None, min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def _days_are_sane(self) -> "WorkingPatternUpdate":
+        for key, value in self.days.items():
+            if key not in {"1", "2", "3", "4", "5", "6", "7"}:
+                raise ValueError(f"'{key}' is not an ISO weekday — use 1 (Monday) to 7")
+            if isinstance(value, list):
+                if not value:
+                    raise ValueError(
+                        f"weekday {key} lists no occurrences — omit the day to stop "
+                        f"teaching it, rather than listing none"
+                    )
+                if any(n < 1 or n > 5 for n in value):
+                    raise ValueError(
+                        f"weekday {key}: occurrences are 1 to 5 within a calendar month"
+                    )
+        if not any(self.days.values()):
+            raise ValueError("a School must teach at least one weekday")
+        return self
+
+
+class WorkingPatternOut(BaseModel):
+    school_id: uuid.UUID
+    term_code: str | None
+    days: dict[str, Any]
+    #: True when nothing is configured and the shipped Mon–Sat default is in
+    #: force — so the caller can show that rather than imply a decision.
+    is_default: bool
+
+
+class CalendarExceptionCreate(BaseModel):
+    on_date: date
+    working: bool
+    #: On a working exception only: the weekday whose timetable this date runs,
+    #: which is how a compensatory Saturday follows Monday.
+    follows_day_of_week: int | None = Field(default=None, ge=1, le=7)
+    reason: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def _follows_needs_working(self) -> "CalendarExceptionCreate":
+        if self.follows_day_of_week is not None and not self.working:
+            raise ValueError(
+                "a non-working date runs no timetable, so it cannot follow a weekday"
+            )
+        return self
+
+
+class CalendarExceptionOut(BaseModel):
+    id: uuid.UUID
+    school_id: uuid.UUID
+    on_date: date
+    working: bool
+    follows_day_of_week: int | None
+    reason: str
+
+    model_config = {"from_attributes": True}
+
+
+class ResolvedDayOut(BaseModel):
+    """One date's answer, naming the layer that decided it."""
+
+    on_date: date
+    teaching: bool
+    #: The weekday whose timetable runs — normally the date's own, but a
+    #: compensatory day runs the weekday it follows.
+    effective_day_of_week: int | None
+    decided_by: Literal[
+        "school-exception", "school-override", "university-holiday",
+        "school-pattern", "school-pattern-default",
+    ]
+    detail: str

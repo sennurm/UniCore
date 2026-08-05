@@ -60,15 +60,10 @@ type Venue = { id: string; code: string; name: string; capacity: number; kind: s
 type Person = { user_id: string; full_name: string; kind: string };
 type Clash = { kind: string; message: string };
 
-/** Indian universities teach Monday–Saturday; Sunday is not on the grid. */
-const DAYS = [
-  { n: 1, label: "Mon" },
-  { n: 2, label: "Tue" },
-  { n: 3, label: "Wed" },
-  { n: 4, label: "Thu" },
-  { n: 5, label: "Fri" },
-  { n: 6, label: "Sat" },
-];
+/** Which days appear is the School's decision, not a constant: a Nursing School
+ *  teaches Sunday for clinical postings while Engineering next door does not. */
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+type WorkingPattern = { days: Record<string, boolean | number[]>; is_default: boolean };
 
 const BLANK_PERIOD = { name: "", start_time: "09:00", end_time: "10:00" };
 
@@ -83,6 +78,7 @@ export default function TimetablePage() {
   const [staff, setStaff] = useState<Person[]>([]);
 
   const [schoolId, setSchoolId] = useState<string | null>(null);
+  const [pattern, setPattern] = useState<WorkingPattern | null>(null);
   const [search, setSearch] = useState("");
   const [termCode, setTermCode] = useState("");
 
@@ -130,6 +126,28 @@ export default function TimetablePage() {
   const schools = useMemo(() => units.filter((u) => u.type === "school"), [units]);
   const byId = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
   const school = useMemo(() => schools.find((s) => s.id === schoolId) ?? null, [schools, schoolId]);
+
+  useEffect(() => {
+    if (!schoolId) {
+      setPattern(null);
+      return;
+    }
+    void api<WorkingPattern>(`/timetable/schools/${schoolId}/working-pattern`)
+      .then(setPattern)
+      .catch(() => setPattern(null));
+  }, [schoolId]);
+
+  /** The columns this School actually teaches. An nth-weekday rule ("Saturdays:
+   *  1st and 3rd") still shows the column — a weekly entry is placed on the
+   *  weekday; which dates it runs on is the calendar's business. */
+  const days = useMemo(() => {
+    const rule = pattern?.days ?? { "1": true, "2": true, "3": true, "4": true, "5": true, "6": true };
+    return DAY_LABELS.map((label, i) => ({ n: i + 1, label }))
+      .filter((d) => {
+        const value = rule[String(d.n)];
+        return value === true || (Array.isArray(value) && value.length > 0);
+      });
+  }, [pattern]);
 
   const visibleSchools = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -718,7 +736,7 @@ export default function TimetablePage() {
                         <thead>
                           <tr>
                             <th style={{ width: 130 }}>Period</th>
-                            {DAYS.map((d) => (
+                            {days.map((d) => (
                               <th key={d.n}>{d.label}</th>
                             ))}
                           </tr>
@@ -732,7 +750,7 @@ export default function TimetablePage() {
                                   {hhmm(period.start_time)}–{hhmm(period.end_time)}
                                 </div>
                               </td>
-                              {DAYS.map((day) => {
+                              {days.map((day) => {
                                 const cell = placed.get(`${day.n}:${period.name}`);
                                 const isPlacing =
                                   placing?.day === day.n && placing?.period.id === period.id;
@@ -778,7 +796,7 @@ export default function TimetablePage() {
                       {placing && (
                         <div className="card">
                           <div className="card-kicker">
-                            {DAYS.find((d) => d.n === placing.day)?.label} · {placing.period.name}{" "}
+                            {days.find((d) => d.n === placing.day)?.label} · {placing.period.name}{" "}
                             {hhmm(placing.period.start_time)}–{hhmm(placing.period.end_time)}
                           </div>
                           <div className="org-form-grid">

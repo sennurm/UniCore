@@ -8,9 +8,9 @@ year-based Schools simultaneously.
 import csv
 import io
 import uuid
-from collections.abc import Sequence
-from datetime import UTC, date, datetime, time
-from typing import cast
+from collections.abc import Awaitable, Callable, Sequence
+from datetime import UTC, date, datetime, time, timedelta
+from typing import Any, cast
 
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,18 +24,26 @@ from unicore.modules.org import service as org_service
 from unicore.modules.rbac import service as rbac_service
 from unicore.modules.timetable import dao
 from unicore.modules.timetable.models import (
+    DEFAULT_WORKING_DAYS,
     TERM_PARITIES,
     AcademicTerm,
     Period,
     PeriodGrid,
+    SchoolCalendarException,
+    SchoolWorkingPattern,
     TimetableApproval,
     TimetableDraft,
     TimetableEntry,
+    UniversityHoliday,
 )
 from unicore.modules.timetable.schemas import (
     SECTION_CSV_COLUMNS,
+    CalendarExceptionCreate,
+    HolidayCreate,
+    HolidayUpdate,
     MultiSchoolTermCreate,
     TermCreate,
+    WorkingPatternUpdate,
 )
 from unicore.modules.user import service as user_service
 
@@ -725,6 +733,22 @@ async def add_entry(
             status_code=422, detail="That Section belongs to another School's timetable."
         )
 
+    # A class on a day the School does not teach produces no Session, ever — so
+    # it is a mistake rather than a judgement call, and blocks like a clash
+    # (§4 rule 12). Without this an entry saves, holds a room against every
+    # other School's clash checks, and is invisible in every view.
+    days, is_default = await pattern_for(session, draft.school_id, draft.term_code)
+    if not _teaches(days, day_of_week):
+        school = await org_service.get_unit(session, draft.school_id)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"{school.name} does not teach {_DAY_NAMES[day_of_week]}. "
+                f"It teaches {_working_day_names(days)}"
+                + (" (no working pattern set — university default)." if is_default else ".")
+            ),
+        )
+
     offering = await org_service.get_offering(session, offering_id)
     subject = await org_service.get_subject(session, offering.subject_id)
     # A Programme-bound offering must match the Section's Programme and ladder
@@ -1172,3 +1196,487 @@ async def _personal_rows(
             }
         )
     return rows
+
+
+# --- calendar: holidays, working days, resolution (TTM-FR-26/27/28) ----------
+
+#: ATT owns attendance, and this module must not import it — so ATT registers a
+#: probe at startup, exactly as org takes a position reader from ONB. Until ATT
+#: exists the default answers "nothing captured", which makes the guard in §4
+#: rule 13 live and testable now and correct the day ATT lands.
+_DAY_NAMES = {1: "Monday", 2: "Tuesday", 3: "Wednesday", 4: "Thursday",
+              5: "Friday", 6: "Saturday", 7: "Sunday"}
+
+
+AttendanceProbe = Callable[
+    [AsyncSession, uuid.UUID | None, date, date], Awaitable[list[str]]
+]
+
+
+async def _no_attendance(
+    session: AsyncSession, school_id: uuid.UUID | None, start: date, end: date
+) -> list[str]:
+    return []
+
+
+_attendance_probe: AttendanceProbe = _no_attendance
+
+
+def register_attendance_probe(probe: AttendanceProbe) -> None:
+    """Called once at startup by whoever owns captured attendance."""
+    global _attendance_probe
+    _attendance_probe = probe
+
+
+async def _refuse_if_attendance_captured(
+    session: AsyncSession, school_id: uuid.UUID | None, start: date, end: date, what: str
+) -> None:
+    """Narrowing the calendar never voids attendance (§4 rule 13).
+
+    Attendance gates exam eligibility under UGC minimum-attendance norms, so an
+    administrative edit that would erase teaching days out from under it is
+    refused and names what it found.
+    """
+    captured = await _attendance_probe(session, school_id, start, end)
+    if captured:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot {what}: attendance has already been captured for "
+                f"{len(captured)} session(s) in that range — "
+                f"{', '.join(captured[:5])}"
+                f"{'…' if len(captured) > 5 else ''}. "
+                f"Correct the attendance first."
+            ),
+        )
+
+
+def _occurrence_in_month(on_date: date) -> int:
+    """Which occurrence of its own weekday this date is within its month — the
+    2nd Saturday is 2. Counted within the calendar month, never by ISO week
+    number, which drifts across month boundaries."""
+    return (on_date.day - 1) // 7 + 1
+
+
+def _teaches(days: dict[str, Any], day_of_week: int, on_date: date | None = None) -> bool:
+    """Does this pattern teach that weekday — and, for an nth-weekday rule, on
+    that particular date? With no date, a qualified day counts as taught: the
+    question is then "is this weekday ever taught", which is what the authoring
+    guard asks of a weekly recurring entry."""
+    rule = days.get(str(day_of_week))
+    if rule is None or rule is False:
+        return False
+    if rule is True:
+        return True
+    if on_date is None:
+        return True  # taught on some occurrences, so the weekday is in use
+    return _occurrence_in_month(on_date) in cast(list[int], rule)
+
+
+def _working_day_names(days: dict[str, Any]) -> str:
+    names = {1: "Mon", 2: "Tue", 3: "Wed", 4: "Thu", 5: "Fri", 6: "Sat", 7: "Sun"}
+    parts = []
+    for n in range(1, 8):
+        rule = days.get(str(n))
+        if rule is True:
+            parts.append(names[n])
+        elif isinstance(rule, list):
+            suffix = {1: "st", 2: "nd", 3: "rd"}
+            ordinals = ", ".join(f"{o}{suffix.get(o, 'th')}" for o in rule)
+            parts.append(f"{names[n]} ({ordinals} of the month)")
+    return ", ".join(parts) or "no days"
+
+
+async def pattern_for(
+    session: AsyncSession, school_id: uuid.UUID, term_code: str | None = None
+) -> tuple[dict[str, Any], bool]:
+    """The days a School teaches, plus whether that is the shipped default.
+
+    A School that has never declared its week falls back to Monday–Saturday
+    rather than to nothing — an unconfigured School must not silently produce a
+    term with no classes — and the fallback is reported so the caller can show
+    it rather than imply a decision was made.
+    """
+    row = await dao.working_pattern(session, school_id, term_code)
+    if row is None:
+        return dict(DEFAULT_WORKING_DAYS), True
+    return cast(dict[str, Any], row.days), False
+
+
+def _holiday_applies(holiday: UniversityHoliday, campus_code: str | None) -> bool:
+    """An untagged holiday closes the whole university; a tagged one closes only
+    the campuses it names, so a School on another campus stays open. A School
+    with no campus recorded is in no list, so tagged holidays pass it by."""
+    if not holiday.campus_codes:
+        return True
+    return campus_code is not None and campus_code in holiday.campus_codes
+
+
+async def resolve_days(
+    session: AsyncSession,
+    school_id: uuid.UUID,
+    start: date,
+    end: date,
+    term_code: str | None = None,
+) -> list[dict[str, object]]:
+    """Is each date a teaching day for this School, and which weekday does it run?
+
+    Most-specific-wins (§4 rule 11): a dated exception, then the School working
+    through a university holiday, then the holiday, then the weekly pattern.
+    Every answer names the layer that decided it, so "why do I have class on
+    Sunday?" has an answer rather than a shrug.
+
+    Everything is fetched once for the whole range — ATT expands a term against
+    this, so a query per date would not survive contact with a real term.
+    """
+    if end < start:
+        raise HTTPException(status_code=422, detail="The range ends before it starts.")
+    school = await org_service.get_unit(session, school_id)
+    if school.type != "school":
+        raise HTTPException(status_code=422, detail="Working days are a School attribute.")
+
+    days, is_default = await pattern_for(session, school_id, term_code)
+    holidays = [
+        h for h in await dao.holidays_between(session, start, end)
+        if _holiday_applies(h, school.campus_code)
+    ]
+    exceptions = {
+        e.on_date: e for e in await dao.exceptions_between(session, school_id, start, end)
+    }
+
+    resolved: list[dict[str, object]] = []
+    cursor = start
+    while cursor <= end:
+        holiday = next(
+            (h for h in holidays if h.from_date <= cursor <= h.to_date), None
+        )
+        exception = exceptions.get(cursor)
+        if exception is not None and not exception.working:
+            resolved.append({
+                "on_date": cursor, "teaching": False, "effective_day_of_week": None,
+                "decided_by": "school-exception", "detail": exception.reason,
+            })
+        elif exception is not None:
+            effective = exception.follows_day_of_week or cursor.isoweekday()
+            resolved.append({
+                "on_date": cursor, "teaching": True, "effective_day_of_week": effective,
+                # Working through a declared holiday is a different act from an
+                # ordinary working exception, and the answer says which it was.
+                "decided_by": "school-override" if holiday else "school-exception",
+                "detail": (
+                    f"{exception.reason}"
+                    + (f" (runs {_DAY_NAMES[effective]}'s timetable)"
+                       if exception.follows_day_of_week else "")
+                    + (f" — despite '{holiday.label}'" if holiday else "")
+                ),
+            })
+        elif holiday is not None:
+            resolved.append({
+                "on_date": cursor, "teaching": False, "effective_day_of_week": None,
+                "decided_by": "university-holiday",
+                "detail": f"{holiday.label} ({holiday.kind})",
+            })
+        else:
+            teaching = _teaches(days, cursor.isoweekday(), cursor)
+            resolved.append({
+                "on_date": cursor,
+                "teaching": teaching,
+                "effective_day_of_week": cursor.isoweekday() if teaching else None,
+                "decided_by": "school-pattern-default" if is_default else "school-pattern",
+                "detail": (
+                    f"{school.name} teaches {_working_day_names(days)}"
+                    + (" (no pattern set — university default)" if is_default else "")
+                ),
+            })
+        cursor += timedelta(days=1)
+    return resolved
+
+
+async def resolve_day(
+    session: AsyncSession, school_id: uuid.UUID, on_date: date, term_code: str | None = None
+) -> dict[str, object]:
+    return (await resolve_days(session, school_id, on_date, on_date, term_code))[0]
+
+
+# --- university holiday calendar (TTM-FR-26) ---------------------------------
+
+
+async def create_holiday(
+    session: AsyncSession, ctx: AuthContext, data: HolidayCreate
+) -> UniversityHoliday:
+    await _refuse_if_attendance_captured(
+        session, None, data.from_date, data.to_date, f"declare '{data.label}' a holiday"
+    )
+    holiday = UniversityHoliday(
+        from_date=data.from_date,
+        to_date=data.to_date,
+        label=data.label,
+        kind=data.kind,
+        campus_codes=data.campus_codes,
+        created_by=ctx.user_id,
+    )
+    session.add(holiday)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.holiday.created",
+        object_type="university_holiday",
+        object_id=str(holiday.id),
+        after=_holiday_snapshot(holiday),
+    )
+    await session.commit()
+    return holiday
+
+
+def _holiday_snapshot(holiday: UniversityHoliday) -> dict[str, object]:
+    return {
+        "label": holiday.label,
+        "kind": holiday.kind,
+        "from_date": holiday.from_date.isoformat(),
+        "to_date": holiday.to_date.isoformat(),
+        "campus_codes": list(holiday.campus_codes),
+        "status": holiday.status,
+    }
+
+
+async def update_holiday(
+    session: AsyncSession, ctx: AuthContext, holiday_id: uuid.UUID, data: HolidayUpdate
+) -> UniversityHoliday:
+    holiday = await dao.get_holiday(session, holiday_id)
+    if holiday is None:
+        raise HTTPException(status_code=404, detail="Holiday not found.")
+    before = _holiday_snapshot(holiday)
+    new_from = data.from_date or holiday.from_date
+    new_to = data.to_date or holiday.to_date
+    if new_to < new_from:
+        raise HTTPException(status_code=422, detail="to_date cannot be before from_date.")
+    # Only dates the entry does not already cover are newly closed; re-checking
+    # the dates it already covered would refuse a pure relabel.
+    if new_from < holiday.from_date:
+        await _refuse_if_attendance_captured(
+            session, None, new_from, holiday.from_date, "extend that holiday"
+        )
+    if new_to > holiday.to_date:
+        await _refuse_if_attendance_captured(
+            session, None, holiday.to_date, new_to, "extend that holiday"
+        )
+    holiday.from_date, holiday.to_date = new_from, new_to
+    if data.label is not None:
+        holiday.label = data.label
+    if data.kind is not None:
+        holiday.kind = data.kind
+    if data.campus_codes is not None:
+        holiday.campus_codes = data.campus_codes
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.holiday.updated",
+        object_type="university_holiday",
+        object_id=str(holiday.id),
+        before=before,
+        after=_holiday_snapshot(holiday),
+    )
+    await session.commit()
+    return holiday
+
+
+async def withdraw_holiday(
+    session: AsyncSession, ctx: AuthContext, holiday_id: uuid.UUID
+) -> UniversityHoliday:
+    """Withdrawing a holiday *widens* the calendar, so it needs no guard — but
+    the entry is kept rather than deleted, because a date that used to be closed
+    is exactly the kind of thing an audit later asks about."""
+    holiday = await dao.get_holiday(session, holiday_id)
+    if holiday is None:
+        raise HTTPException(status_code=404, detail="Holiday not found.")
+    before = _holiday_snapshot(holiday)
+    holiday.status = "withdrawn"
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.holiday.withdrawn",
+        object_type="university_holiday",
+        object_id=str(holiday.id),
+        before=before,
+        after=_holiday_snapshot(holiday),
+    )
+    await session.commit()
+    return holiday
+
+
+async def list_holidays(
+    session: AsyncSession, start: date | None, end: date | None, limit: int = 500
+) -> Sequence[UniversityHoliday]:
+    return await dao.list_holidays(session, start, end, limit)
+
+
+# --- School working pattern and exceptions (TTM-FR-27) -----------------------
+
+
+async def set_working_pattern(
+    session: AsyncSession, ctx: AuthContext, school_id: uuid.UUID, data: WorkingPatternUpdate
+) -> SchoolWorkingPattern:
+    """Declare which weekdays a School teaches.
+
+    Set directly rather than drafted and approved: the School Incharge is the
+    approver for every other School-scoped decision, so a workflow here would
+    only have them approving themselves. The before/after goes to audit instead.
+    """
+    school = await org_service.get_unit(session, school_id)
+    if school.type != "school":
+        raise HTTPException(
+            status_code=422,
+            detail="Working days are a School attribute — no per-Department patterns.",
+        )
+    await rbac_service.ensure_scope_covers(
+        session, ctx, ("school-incharge", "system-admin", "super-admin"), school_id
+    )
+
+    current, _ = await pattern_for(session, school_id, data.term_code)
+    # Withdrawing a taught weekday would orphan whatever is published on it;
+    # widening never can, so only the days being turned off are checked.
+    for day in range(1, 8):
+        if _teaches(current, day) and not _teaches(data.days, day):
+            orphans = await dao.published_entries_on_weekday(session, school_id, day)
+            if orphans:
+                where = sorted({f"{o.term_code} {o.period_name}" for o in orphans})
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Cannot stop teaching {_DAY_NAMES[day]}: {len(orphans)} published "
+                        f"class(es) are scheduled then ({', '.join(where)[:200]}). "
+                        f"Republish those timetables without {_DAY_NAMES[day]} first."
+                    ),
+                )
+
+    row = await dao.working_pattern(session, school_id, data.term_code)
+    # `working_pattern` falls back to the standing row, so a first-time term
+    # override must not be mistaken for it and edited in place.
+    if row is not None and row.term_code != data.term_code:
+        row = None
+    before = dict(row.days) if row is not None else None
+    if row is None:
+        row = SchoolWorkingPattern(
+            school_id=school_id, term_code=data.term_code, days=dict(data.days),
+            updated_by=ctx.user_id,
+        )
+        session.add(row)
+    else:
+        row.days = dict(data.days)
+        row.updated_by = ctx.user_id
+        row.updated_at = datetime.now(UTC)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.working-pattern.set",
+        object_type="school_working_pattern",
+        object_id=str(row.id),
+        scope=school.path,
+        before={"days": before} if before else None,
+        after={"days": dict(data.days), "term_code": data.term_code},
+    )
+    await session.commit()
+    return row
+
+
+async def add_calendar_exception(
+    session: AsyncSession, ctx: AuthContext, school_id: uuid.UUID,
+    data: CalendarExceptionCreate, term_code: str | None = None,
+) -> SchoolCalendarException:
+    """One dated override — a closed day, or a day worked anyway."""
+    school = await org_service.get_unit(session, school_id)
+    if school.type != "school":
+        raise HTTPException(status_code=422, detail="Calendar exceptions belong to a School.")
+    await rbac_service.ensure_scope_covers(
+        session, ctx, ("school-incharge", "system-admin", "super-admin"), school_id
+    )
+
+    if not data.working:
+        await _refuse_if_attendance_captured(
+            session, school_id, data.on_date, data.on_date,
+            f"close {data.on_date:%d-%m-%Y}",
+        )
+    else:
+        # A working day that runs nothing is not a working day. Whether it
+        # follows another weekday or its own, that weekday has to be taught.
+        days, _ = await pattern_for(session, school_id, term_code)
+        effective = data.follows_day_of_week or data.on_date.isoweekday()
+        if not _teaches(days, effective):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"{school.name} does not teach {_DAY_NAMES[effective]}, so that date "
+                    f"would run an empty timetable. It teaches "
+                    f"{_working_day_names(days)}."
+                ),
+            )
+
+    existing = await dao.get_exception(session, school_id, data.on_date)
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{data.on_date:%d-%m-%Y} already has an exception for this School.",
+        )
+    row = SchoolCalendarException(
+        school_id=school_id,
+        on_date=data.on_date,
+        working=data.working,
+        follows_day_of_week=data.follows_day_of_week,
+        reason=data.reason,
+        created_by=ctx.user_id,
+    )
+    session.add(row)
+    await session.flush()
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.calendar-exception.added",
+        object_type="school_calendar_exception",
+        object_id=str(row.id),
+        scope=school.path,
+        after={
+            "on_date": data.on_date.isoformat(),
+            "working": data.working,
+            "follows_day_of_week": data.follows_day_of_week,
+            "reason": data.reason,
+        },
+    )
+    await session.commit()
+    return row
+
+
+async def remove_calendar_exception(
+    session: AsyncSession, ctx: AuthContext, school_id: uuid.UUID, on_date: date
+) -> None:
+    school = await org_service.get_unit(session, school_id)
+    await rbac_service.ensure_scope_covers(
+        session, ctx, ("school-incharge", "system-admin", "super-admin"), school_id
+    )
+    row = await dao.get_exception(session, school_id, on_date)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No exception on that date.")
+    # Removing a *working* exception narrows the calendar back to the pattern,
+    # which can withdraw a day attendance was captured on.
+    if row.working:
+        await _refuse_if_attendance_captured(
+            session, school_id, on_date, on_date, f"remove the working day {on_date:%d-%m-%Y}"
+        )
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="ttm.calendar-exception.removed",
+        object_type="school_calendar_exception",
+        object_id=str(row.id),
+        scope=school.path,
+        before={"on_date": on_date.isoformat(), "working": row.working, "reason": row.reason},
+    )
+    await session.delete(row)
+    await session.commit()
+
+
+async def list_calendar_exceptions(
+    session: AsyncSession, school_id: uuid.UUID, start: date, end: date
+) -> Sequence[SchoolCalendarException]:
+    return await dao.exceptions_between(session, school_id, start, end)

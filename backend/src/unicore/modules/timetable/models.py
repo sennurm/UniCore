@@ -9,6 +9,8 @@ from datetime import date, datetime, time
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -21,7 +23,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from unicore.core.db import Base
@@ -208,3 +210,121 @@ class TimetableApproval(Base):
     decided_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+# --- calendar: university holidays + School working days (TTM-FR-26/27) -------
+
+HOLIDAY_KINDS = ("public", "vacation", "local")
+HOLIDAY_STATUSES = ("active", "withdrawn")
+
+#: Shipped default for a School that has never declared its week: Monday to
+#: Saturday, every Saturday. A School with no pattern must not resolve to zero
+#: teaching days — an unconfigured School would silently produce an empty term.
+DEFAULT_WORKING_DAYS: dict[str, object] = {"1": True, "2": True, "3": True, "4": True,
+                                           "5": True, "6": True}
+
+
+class UniversityHoliday(Base):
+    """A closed date range for the whole university (TTM-FR-26).
+
+    A range rather than a date because a vacation block moves as one edit, not
+    fourteen; a single-day holiday is simply a one-day range. `campus_codes`
+    empty means university-wide — a regional festival names the campuses that
+    observe it, so the others stay open.
+    """
+
+    __tablename__ = "university_holidays"
+    __table_args__ = (
+        CheckConstraint("to_date >= from_date", name="ck_holiday_range_ordered"),
+        Index("ix_holidays_dates", "from_date", "to_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    from_date: Mapped[date] = mapped_column(Date, nullable=False)
+    to_date: Mapped[date] = mapped_column(Date, nullable=False)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    kind: Mapped[str] = mapped_column(
+        Enum(*HOLIDAY_KINDS, name="holiday_kind", create_type=False), nullable=False
+    )
+    campus_codes: Mapped[list[str]] = mapped_column(
+        ARRAY(String(50)), nullable=False, default=list
+    )
+    status: Mapped[str] = mapped_column(
+        Enum(*HOLIDAY_STATUSES, name="holiday_status", create_type=False),
+        nullable=False,
+        default="active",
+    )
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SchoolWorkingPattern(Base):
+    """Which weekdays a School teaches (TTM-FR-27).
+
+    `days` maps an ISO weekday ("1" = Monday) to either `true` — every
+    occurrence of that weekday — or a list of occurrence numbers within the
+    calendar month, which is how "Saturdays: 1st and 3rd" is expressed without
+    entering twelve dates a term. A missing key means the School does not teach
+    that weekday.
+
+    `term_code` NULL is the School's **standing** pattern, inherited by every
+    term; a row with a term_code overrides it for that term alone.
+    """
+
+    __tablename__ = "school_working_patterns"
+    __table_args__ = (
+        # Postgres treats NULLs as distinct, so the standing row needs its own
+        # partial index to stay unique.
+        Index(
+            "uq_working_pattern_standing", "school_id",
+            unique=True, postgresql_where="term_code IS NULL",
+        ),
+        Index(
+            "uq_working_pattern_term", "school_id", "term_code",
+            unique=True, postgresql_where="term_code IS NOT NULL",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
+    term_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    days: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class SchoolCalendarException(Base):
+    """One dated override of a School's week (TTM-FR-27).
+
+    Covers both directions: a date the School does not teach though its pattern
+    says it would, and a date it does teach though a holiday or its pattern says
+    otherwise — the Nursing ward that does not close for Pongal.
+
+    `follows_day_of_week` is what makes a compensatory day work: "14-11-2026 is
+    working, follow Monday" runs Monday's timetable on a Saturday. Without it the
+    Sessions for a made-up day could not be generated at all.
+    """
+
+    __tablename__ = "school_calendar_exceptions"
+    __table_args__ = (
+        UniqueConstraint("school_id", "on_date", name="uq_calendar_exception_school_date"),
+        CheckConstraint(
+            "follows_day_of_week IS NULL OR (working AND follows_day_of_week BETWEEN 1 AND 7)",
+            name="ck_exception_follows_only_when_working",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), nullable=False)
+    on_date: Mapped[date] = mapped_column(Date, nullable=False)
+    working: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    follows_day_of_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

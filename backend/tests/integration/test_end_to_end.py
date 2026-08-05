@@ -16,6 +16,16 @@ import httpx
 
 from tests.integration.conftest import PERIODS, STAFF, TERM, username_of
 
+
+async def _resolve(admin: httpx.AsyncClient, school_id: str, on: str) -> dict:
+    """One date's answer from the calendar resolver."""
+    response = await admin.get(
+        f"/timetable/schools/{school_id}/calendar",
+        params={"from_date": on, "to_date": on},
+    )
+    assert response.status_code == 200, response.text
+    return response.json()[0]
+
 # --- the setup chain itself ---------------------------------------------------
 
 
@@ -141,7 +151,84 @@ async def test_a_nursing_student_never_sees_the_engineering_week(
 ) -> None:
     async with make_client("student", user_id="r0004") as student:
         mine = (await student.get("/timetable/me", params={"term_code": TERM})).json()
-    assert sorted(r["subject_code"] for r in mine["rows"]) == ["NUR101", "NUR201"]
+    week = {(r["day_of_week"], r["period_name"]): r["subject_code"] for r in mine["rows"]}
+    assert week == {
+        (1, "P3"): "NUR101",  # field work at the PHC
+        (2, "P3"): "NUR201",
+        (7, "P1"): "NUR201",  # Sunday ward duty
+    }
+
+
+# --- the calendar (TTM-FR-26/27/28) -------------------------------------------
+
+
+async def test_each_school_teaches_the_week_it_declared(
+    make_client: Callable[..., httpx.AsyncClient], world: dict
+) -> None:
+    """The reason working days are a School attribute: on one campus, in one
+    term, Nursing teaches Sunday and Engineering does not."""
+    async with make_client("super-admin") as admin:
+        # 06-09-2026 is a Sunday; 12-09-2026 is the 2nd Saturday of that month.
+        nursing_sunday = await _resolve(admin, world["school_SONUR"], "2026-09-06")
+        engineering_sunday = await _resolve(admin, world["school_SOCE"], "2026-09-06")
+        first_saturday = await _resolve(admin, world["school_SOCE"], "2026-09-05")
+        second_saturday = await _resolve(admin, world["school_SOCE"], "2026-09-12")
+
+    assert nursing_sunday["teaching"] is True
+    assert engineering_sunday["teaching"] is False
+    # Alternate Saturdays, without a dated row per Saturday of the term.
+    assert (first_saturday["teaching"], second_saturday["teaching"]) == (True, False)
+
+
+async def test_a_school_works_through_a_university_holiday(
+    make_client: Callable[..., httpx.AsyncClient], world: dict
+) -> None:
+    """Founder's Day closes the university; the Nursing ward does not close."""
+    async with make_client("super-admin") as admin:
+        engineering = await _resolve(admin, world["school_SOCE"], "2026-09-14")
+        nursing = await _resolve(admin, world["school_SONUR"], "2026-09-14")
+
+    assert (engineering["teaching"], engineering["decided_by"]) == (False, "university-holiday")
+    assert (nursing["teaching"], nursing["decided_by"]) == (True, "school-override")
+    assert "Founder's Day" in nursing["detail"]
+
+
+async def test_a_compensatory_saturday_runs_mondays_timetable(
+    make_client: Callable[..., httpx.AsyncClient], world: dict
+) -> None:
+    """19-09-2026 is a 3rd Saturday the School already teaches — but it runs
+    Monday's schedule, which is what makes the lost day recoverable."""
+    async with make_client("super-admin") as admin:
+        made_up = await _resolve(admin, world["school_SOCE"], "2026-09-19")
+    assert made_up["teaching"] is True
+    assert made_up["effective_day_of_week"] == 1
+    assert made_up["decided_by"] == "school-exception"
+
+
+async def test_engineering_cannot_schedule_the_sunday_nursing_teaches(
+    make_client: Callable[..., httpx.AsyncClient], world: dict
+) -> None:
+    """The authoring guard, in the world where the two Schools disagree."""
+    async with make_client("super-admin") as admin:
+        # The world's draft is published, so changes go through a new one.
+        draft = await admin.post(
+            "/timetable/drafts",
+            json={"school_id": world["school_SOCE"], "term_code": TERM},
+        )
+        assert draft.status_code == 201, draft.text
+        refused = await admin.post(
+            f"/timetable/drafts/{draft.json()['id']}/entries",
+            json={
+                "section_id": world["section_BT-CSE"],
+                "day_of_week": 7,
+                "period_id": world["period_SOCE_P4"],
+                "offering_id": world["offering_MA101"],
+                "faculty_user_id": world["staff_EMP-9001"],
+                "venue_id": world["venue_CR-101"],
+            },
+        )
+    assert refused.status_code == 422, refused.text
+    assert "does not teach Sunday" in refused.json()["detail"]
 
 
 # --- the rules that hold the flow together ------------------------------------

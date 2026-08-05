@@ -2,7 +2,7 @@
 
 import uuid
 from collections.abc import Sequence
-from datetime import time
+from datetime import date, time
 from typing import Any
 
 from sqlalchemy import Row, select
@@ -12,9 +12,12 @@ from unicore.modules.timetable.models import (
     AcademicTerm,
     Period,
     PeriodGrid,
+    SchoolCalendarException,
+    SchoolWorkingPattern,
     TimetableApproval,
     TimetableDraft,
     TimetableEntry,
+    UniversityHoliday,
 )
 
 
@@ -282,3 +285,116 @@ async def published_entries_for_faculty(
         .order_by(TimetableEntry.day_of_week, Period.sequence)
     )
     return [(entry, period) for entry, period in result.all()]
+
+
+# --- calendar (TTM-FR-26/27/28) ----------------------------------------------
+
+
+async def holidays_between(
+    session: AsyncSession, start: date, end: date
+) -> Sequence[UniversityHoliday]:
+    """Active holiday entries whose range overlaps [start, end], inclusive.
+
+    Campus filtering is deliberately not done here: a holiday's campus tags are
+    matched against the *School's* campus by the resolver, which is the only
+    place that knows which School is asking.
+    """
+    result = await session.execute(
+        select(UniversityHoliday)
+        .where(
+            UniversityHoliday.status == "active",
+            UniversityHoliday.from_date <= end,
+            UniversityHoliday.to_date >= start,
+        )
+        .order_by(UniversityHoliday.from_date)
+    )
+    return result.scalars().all()
+
+
+async def list_holidays(
+    session: AsyncSession, start: date | None, end: date | None, limit: int
+) -> Sequence[UniversityHoliday]:
+    query = select(UniversityHoliday).order_by(UniversityHoliday.from_date.desc())
+    if start is not None:
+        query = query.where(UniversityHoliday.to_date >= start)
+    if end is not None:
+        query = query.where(UniversityHoliday.from_date <= end)
+    result = await session.execute(query.limit(limit))
+    return result.scalars().all()
+
+
+async def get_holiday(session: AsyncSession, holiday_id: uuid.UUID) -> UniversityHoliday | None:
+    return await session.get(UniversityHoliday, holiday_id)
+
+
+async def working_pattern(
+    session: AsyncSession, school_id: uuid.UUID, term_code: str | None
+) -> SchoolWorkingPattern | None:
+    """The pattern in force: the term's override if one exists, else the
+    School's standing pattern."""
+    if term_code is not None:
+        result = await session.execute(
+            select(SchoolWorkingPattern).where(
+                SchoolWorkingPattern.school_id == school_id,
+                SchoolWorkingPattern.term_code == term_code,
+            )
+        )
+        override = result.scalar_one_or_none()
+        if override is not None:
+            return override
+    result = await session.execute(
+        select(SchoolWorkingPattern).where(
+            SchoolWorkingPattern.school_id == school_id,
+            SchoolWorkingPattern.term_code.is_(None),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def exceptions_between(
+    session: AsyncSession, school_id: uuid.UUID, start: date, end: date
+) -> Sequence[SchoolCalendarException]:
+    result = await session.execute(
+        select(SchoolCalendarException)
+        .where(
+            SchoolCalendarException.school_id == school_id,
+            SchoolCalendarException.on_date >= start,
+            SchoolCalendarException.on_date <= end,
+        )
+        .order_by(SchoolCalendarException.on_date)
+    )
+    return result.scalars().all()
+
+
+async def get_exception(
+    session: AsyncSession, school_id: uuid.UUID, on_date: date
+) -> SchoolCalendarException | None:
+    result = await session.execute(
+        select(SchoolCalendarException).where(
+            SchoolCalendarException.school_id == school_id,
+            SchoolCalendarException.on_date == on_date,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def published_entries_on_weekday(
+    session: AsyncSession, school_id: uuid.UUID, day_of_week: int
+) -> Sequence[Row[Any]]:
+    """Live published entries a School teaches on one weekday — what turning
+    that weekday off would orphan."""
+    result = await session.execute(
+        select(
+            TimetableEntry.id,
+            TimetableDraft.term_code,
+            Period.name.label("period_name"),
+        )
+        .join(TimetableDraft, TimetableDraft.id == TimetableEntry.draft_id)
+        .join(Period, Period.id == TimetableEntry.period_id)
+        .where(
+            TimetableDraft.school_id == school_id,
+            TimetableDraft.status == "published",
+            TimetableEntry.day_of_week == day_of_week,
+        )
+    )
+    return result.all()
