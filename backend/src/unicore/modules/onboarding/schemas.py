@@ -328,8 +328,7 @@ class ElectiveOptionOut(BaseModel):
     subject_name: str
     elective_group: str
     credits: int
-    theory_hours: int
-    lab_hours: int
+    hours: dict[str, int]
     capacity: int | None
     seats_taken: int
     seats_left: int | None  # None when the offering is unlimited

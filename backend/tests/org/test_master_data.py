@@ -872,4 +872,4 @@ async def test_downloaded_subject_template_uploads_back(make_client, campus) -> 
             files={"file": ("t.csv", template.text.encode(), "text/csv")},
         )
     assert result.status_code == 200, result.text
-    assert result.json()["rows_total"] == 4
+    assert result.json()["rows_total"] == 5  # four originals plus the Nursing row

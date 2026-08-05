@@ -20,10 +20,12 @@ type Subject = {
   kind: string;
   elective_group: string | null;
   credits: number;
-  theory_hours: number;
-  lab_hours: number;
+  hours: Record<string, number>;
   status: string;
 };
+/** A teaching component — theory, lab, field work, clinical posting. The
+ *  university ships the list; each School turns on the ones it actually uses. */
+type Component = { id: string; code: string; name: string; enabled: boolean };
 type Offering = {
   id: string;
   subject_id: string;
@@ -55,7 +57,7 @@ type ImportResult = {
 };
 
 const ELECTIVE_GROUPS = ["general", "professional", "open"];
-const VENUE_KINDS = ["classroom", "lab", "seminar", "auditorium", "workshop"];
+const VENUE_KINDS = ["classroom", "lab", "seminar", "auditorium", "workshop", "field"];
 
 const BLANK_SUBJECT = {
   code: "",
@@ -64,8 +66,6 @@ const BLANK_SUBJECT = {
   kind: "core",
   elective_group: "",
   credits: "3",
-  theory_hours: "3",
-  lab_hours: "0",
 };
 const BLANK_VENUE = {
   code: "",
@@ -87,7 +87,12 @@ export default function SubjectsPage() {
   const [departmentFilter, setDepartmentFilter] = useState("");
 
   const [subjectForm, setSubjectForm] = useState(BLANK_SUBJECT);
+  const [hoursForm, setHoursForm] = useState<Record<string, string>>({});
   const [addingSubject, setAddingSubject] = useState(false);
+
+  const [configSchoolId, setConfigSchoolId] = useState("");
+  const [schoolComponents, setSchoolComponents] = useState<Component[]>([]);
+  const [formComponents, setFormComponents] = useState<Component[]>([]);
 
   const [programmeId, setProgrammeId] = useState("");
   const [offerings, setOfferings] = useState<Offering[]>([]);
@@ -141,6 +146,21 @@ export default function SubjectsPage() {
     [units],
   );
   const byId = useMemo(() => new Map(units.map((u) => [u.id, u])), [units]);
+  const schools = useMemo(
+    () => units.filter((u) => u.type === "school").sort((a, b) => a.code.localeCompare(b.code)),
+    [units],
+  );
+
+  /** Walk up to the School that owns a unit — components are a School setting,
+   *  but a subject is entered against its Department. */
+  const schoolOf = useCallback(
+    (unitId: string) => {
+      let node: Unit | undefined = byId.get(unitId);
+      while (node && node.type !== "school") node = node.parent_id ? byId.get(node.parent_id) : undefined;
+      return node ?? null;
+    },
+    [byId],
+  );
   const programme = useMemo(
     () => programmes.find((p) => p.id === programmeId) ?? null,
     [programmes, programmeId],
@@ -150,14 +170,32 @@ export default function SubjectsPage() {
    *  per year, so a 4-year B.Tech runs 1..8. */
   const ladder = useMemo(() => {
     if (!programme?.duration_years) return [];
-    const school = (() => {
-      let node: Unit | undefined = programme;
-      while (node && node.type !== "school") node = node.parent_id ? byId.get(node.parent_id) : undefined;
-      return node;
-    })();
+    const school = schoolOf(programme.id);
     const perYear = (school as unknown as { cadence?: string })?.cadence === "yearly" ? 1 : 2;
     return Array.from({ length: programme.duration_years * perYear }, (_, i) => i + 1);
-  }, [programme, byId]);
+  }, [programme, schoolOf]);
+
+  useEffect(() => {
+    if (!configSchoolId) {
+      setSchoolComponents([]);
+      return;
+    }
+    void api<Component[]>(`/org/components?school_id=${configSchoolId}`)
+      .then(setSchoolComponents)
+      .catch((err) => setError(String((err as Error).message)));
+  }, [configSchoolId]);
+
+  // The hours a subject can carry are whatever its owning School teaches in.
+  useEffect(() => {
+    const school = subjectForm.department_id ? schoolOf(subjectForm.department_id) : null;
+    if (!school) {
+      setFormComponents([]);
+      return;
+    }
+    void api<Component[]>(`/org/components?school_id=${school.id}`)
+      .then((list) => setFormComponents(list.filter((c) => c.enabled)))
+      .catch((err) => setError(String((err as Error).message)));
+  }, [subjectForm.department_id, schoolOf]);
 
   const loadOfferings = useCallback(async () => {
     if (!programmeId) {
@@ -202,14 +240,38 @@ export default function SubjectsPage() {
           elective_group:
             subjectForm.kind === "elective" ? subjectForm.elective_group || null : null,
           credits: Number(subjectForm.credits),
-          theory_hours: Number(subjectForm.theory_hours),
-          lab_hours: Number(subjectForm.lab_hours),
+          // Only components with actual hours are sent — a blank field means
+          // "this subject has none of that", not zero hours of it.
+          hours: Object.fromEntries(
+            Object.entries(hoursForm)
+              .filter(([, v]) => Number(v) > 0)
+              .map(([k, v]) => [k, Number(v)]),
+          ),
         },
       });
       setNotice(`${subjectForm.code} added.`);
       setSubjectForm(BLANK_SUBJECT);
+      setHoursForm({});
       setAddingSubject(false);
       await loadSubjects();
+    } catch (err) {
+      fail(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveComponents(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await api(`/org/schools/${configSchoolId}/components`, {
+        method: "PUT",
+        body: { codes: schoolComponents.filter((c) => c.enabled).map((c) => c.code) },
+      });
+      setNotice("Teaching components saved.");
     } catch (err) {
       fail(err);
     } finally {
@@ -468,19 +530,36 @@ export default function SubjectsPage() {
                   </select>
                 </div>
               )}
-              {(["credits", "theory_hours", "lab_hours"] as const).map((key) => (
-                <div className="field" key={key}>
-                  <label>{key.replace("_", " ")}</label>
+              <div className="field">
+                <label>Credits</label>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  value={subjectForm.credits}
+                  onChange={(e) => setSubjectForm({ ...subjectForm, credits: e.target.value })}
+                />
+              </div>
+              {formComponents.map((c) => (
+                <div className="field" key={c.id}>
+                  <label>{c.name} hours</label>
                   <input
                     className="input"
                     type="number"
                     min={0}
-                    value={subjectForm[key]}
-                    onChange={(e) => setSubjectForm({ ...subjectForm, [key]: e.target.value })}
+                    placeholder="0"
+                    value={hoursForm[c.code] ?? ""}
+                    onChange={(e) => setHoursForm({ ...hoursForm, [c.code]: e.target.value })}
                   />
                 </div>
               ))}
             </div>
+            {subjectForm.department_id && formComponents.length === 0 && (
+              <p className="card-meta">
+                This Department&rsquo;s School has no teaching components enabled — turn some on
+                below before the subject can carry hours.
+              </p>
+            )}
             <button className="btn btn-primary" type="submit" disabled={busy}>
               {busy ? "Adding…" : "Add subject"}
             </button>
@@ -520,7 +599,7 @@ export default function SubjectsPage() {
               <th>Department</th>
               <th>Kind</th>
               <th>Credits</th>
-              <th>T / L hours</th>
+              <th>Hours</th>
             </tr>
           </thead>
           <tbody>
@@ -548,8 +627,10 @@ export default function SubjectsPage() {
                   )}
                 </td>
                 <td>{s.credits}</td>
-                <td>
-                  {s.theory_hours} / {s.lab_hours}
+                <td className="card-meta">
+                  {Object.entries(s.hours ?? {})
+                    .map(([code, h]) => `${code.replace("_", " ")} ${h}`)
+                    .join(" · ") || "—"}
                 </td>
               </tr>
             ))}
@@ -563,6 +644,61 @@ export default function SubjectsPage() {
           </tbody>
         </table>
         {notice && <p className="card-meta">{notice}</p>}
+      </div>
+
+      {/* --- teaching components ------------------------------------------ */}
+      <div className="card">
+        <div className="org-detail-head">
+          <div className="card-kicker">Teaching components · what a School&rsquo;s hours mean</div>
+          <div style={{ flex: 1 }} />
+          <select
+            className="input"
+            style={{ width: 260 }}
+            value={configSchoolId}
+            onChange={(e) => setConfigSchoolId(e.target.value)}
+          >
+            <option value="">— select a School —</option>
+            {schools.map((sc) => (
+              <option key={sc.id} value={sc.id}>
+                {sc.code} · {sc.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <p className="card-meta">
+          Engineering measures a subject in theory and lab hours; Nursing needs clinical postings
+          and Agriculture needs field work. Turn on what this School actually teaches in — those
+          become the hour fields on its subjects, and each one is timetabled and clash-checked like
+          any other class.
+        </p>
+
+        {configSchoolId && (
+          <form onSubmit={saveComponents}>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap", margin: "10px 0" }}>
+              {schoolComponents.map((c) => (
+                <label key={c.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    type="checkbox"
+                    checked={c.enabled}
+                    onChange={(e) =>
+                      setSchoolComponents((list) =>
+                        list.map((x) => (x.id === c.id ? { ...x, enabled: e.target.checked } : x)),
+                      )
+                    }
+                  />
+                  {c.name}
+                </label>
+              ))}
+            </div>
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Save components"}
+            </button>
+            <p className="card-meta" style={{ marginTop: 6 }}>
+              Turning one off hides it from new subjects; hours already recorded against it are
+              kept, so nothing already timetabled is lost.
+            </p>
+          </form>
+        )}
       </div>
 
       {/* --- offerings ---------------------------------------------------- */}

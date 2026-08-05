@@ -22,6 +22,8 @@ from unicore.modules.org.schemas import (
     OrgUnitRename,
     OrgUnitReparent,
     OrgUnitUpdate,
+    SchoolComponentsUpdate,
+    SubjectComponentOut,
     SubjectCreate,
     SubjectOut,
     SubjectUpdate,
@@ -171,10 +173,43 @@ async def list_subjects(
     session: AsyncSession = Depends(get_session),
     ctx: AuthContext = Depends(require_permission("subject:read")),
 ) -> list[SubjectOut]:
-    subjects = await service.list_subjects(
-        session, department_id, kind, search, include_inactive, limit
-    )
-    return [SubjectOut.model_validate(s) for s in subjects]
+    return [
+        SubjectOut.model_validate(s)
+        for s in await service.list_subjects(
+            session, department_id, kind, search, include_inactive, limit
+        )
+    ]
+
+
+@router.get("/components", response_model=list[SubjectComponentOut])
+async def list_components(
+    school_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:read")),
+) -> list[SubjectComponentOut]:
+    """Ways a subject can be taught. With `school_id`, each carries whether that
+    School teaches in it — a School that has never chosen sees the defaults."""
+    if school_id is not None:
+        rows = await service.components_for_school(session, school_id)
+    else:
+        rows = [
+            {"id": c.id, "code": c.code, "name": c.name, "enabled": c.default_enabled}
+            for c in await service.list_components(session)
+        ]
+    return [SubjectComponentOut.model_validate(r) for r in rows]
+
+
+@router.put("/schools/{school_id}/components", response_model=list[SubjectComponentOut])
+async def set_school_components(
+    school_id: uuid.UUID,
+    payload: SchoolComponentsUpdate,
+    session: AsyncSession = Depends(get_session),
+    ctx: AuthContext = Depends(require_permission("subject:write")),
+) -> list[SubjectComponentOut]:
+    """Choose which components this School teaches in — Nursing needs clinical,
+    Engineering does not."""
+    rows = await service.set_school_components(session, ctx, school_id, payload.codes)
+    return [SubjectComponentOut.model_validate(r) for r in rows]
 
 
 @router.put("/subjects/{subject_id}", response_model=SubjectOut)

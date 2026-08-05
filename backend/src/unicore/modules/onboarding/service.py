@@ -1162,17 +1162,16 @@ async def elective_options(
 
     groups: dict[str, list[dict[str, object]]] = {}
     for row in offerings:
-        subject = cast(Any, row["subject"])
-        group = str(subject.elective_group)
+        subject = cast(dict[str, Any], row["subject"])
+        group = str(subject["elective_group"])
         groups.setdefault(group, []).append(
             {
                 "offering_id": row["id"],
-                "subject_code": subject.code,
-                "subject_name": subject.name,
+                "subject_code": subject["code"],
+                "subject_name": subject["name"],
                 "elective_group": group,
-                "credits": subject.credits,
-                "theory_hours": subject.theory_hours,
-                "lab_hours": subject.lab_hours,
+                "credits": subject["credits"],
+                "hours": subject["hours"],
                 "capacity": row["capacity"],
                 "seats_taken": row["seats_taken"],
                 # None where unlimited — a number here is a real countdown, so a

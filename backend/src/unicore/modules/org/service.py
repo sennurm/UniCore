@@ -26,6 +26,7 @@ from unicore.modules.org.models import (
     POSITIONS_PER_YEAR,
     OrgUnit,
     Subject,
+    SubjectComponent,
     SubjectOffering,
     Venue,
 )
@@ -851,11 +852,10 @@ async def create_subject(
         kind=data.kind,
         elective_group=data.elective_group,
         credits=data.credits,
-        theory_hours=data.theory_hours,
-        lab_hours=data.lab_hours,
     )
     session.add(subject)
     await session.flush()
+    await _write_component_hours(session, subject, data.hours)
     await audit_service.record(
         session,
         actor=ctx.user_id,
@@ -876,8 +876,26 @@ async def list_subjects(
     search: str | None = None,
     include_inactive: bool = False,
     limit: int = 500,
-) -> Sequence[Subject]:
-    return await dao.list_subjects(session, department_id, kind, search, include_inactive, limit)
+) -> list[dict[str, object]]:
+    """Subjects with their component hours attached, in one round trip."""
+    subjects = await dao.list_subjects(
+        session, department_id, kind, search, include_inactive, limit
+    )
+    hours = await subject_hours(session, [s.id for s in subjects])
+    return [
+        {
+            "id": s.id,
+            "code": s.code,
+            "name": s.name,
+            "department_id": s.department_id,
+            "kind": s.kind,
+            "elective_group": s.elective_group,
+            "credits": s.credits,
+            "hours": hours.get(s.id, {}),
+            "status": s.status,
+        }
+        for s in subjects
+    ]
 
 
 async def update_subject(
@@ -885,13 +903,18 @@ async def update_subject(
 ) -> Subject:
     """Code, owning Department, kind and elective group are immutable: each is
     referenced by offerings, student choices, syllabus records and question
-    banks, so a change would silently re-point history rather than correct it."""
+    banks, so a change would silently re-point history rather than correct it.
+    Component hours are replaced wholesale when supplied."""
     subject = await dao.get_subject(session, subject_id)
     if subject is None:
         raise HTTPException(status_code=404, detail="Subject not found.")
     before = {"name": subject.name, "credits": subject.credits}
     applied = False
-    for key in ("name", "credits", "theory_hours", "lab_hours"):
+    hours = cast("dict[str, int] | None", changes.get("hours"))
+    if hours is not None:
+        await _write_component_hours(session, subject, hours)
+        applied = True
+    for key in ("name", "credits"):
         value = changes.get(key)
         if value is not None and getattr(subject, key) != value:
             setattr(subject, key, value)
@@ -1005,6 +1028,7 @@ async def list_offerings(
     meaningful to whoever is looking at it.
     """
     rows = await dao.list_offerings(session, program_id, position, kind)
+    hours = await subject_hours(session, [subject.id for _, subject in rows])
     taken: dict[uuid.UUID, int] = {}
     if term_code:
         taken = await dao.count_offering_takers(
@@ -1019,7 +1043,7 @@ async def list_offerings(
             "capacity": offering.capacity,
             "seats_taken": taken.get(offering.id, 0),
             "status": offering.status,
-            "subject": subject,
+            "subject": _subject_row(subject, hours.get(subject.id, {})),
         }
         for offering, subject in rows
     ]
@@ -1267,6 +1291,27 @@ async def import_subjects(
     }
 
 
+def _component_hours_from_row(row: dict[str, str]) -> dict[str, int]:
+    """Any `hours_<component>` column becomes that component's hours.
+
+    Read from the row rather than a fixed list, so a component added to the
+    university catalogue is importable at once — only the shipped template lags.
+    """
+    hours: dict[str, int] = {}
+    for column, raw in row.items():
+        if not column.startswith("hours_") or not raw.strip():
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            raise _OrgRowError(column, f"'{raw}' is not a number") from None
+        if value < 0:
+            raise _OrgRowError(column, "hours cannot be negative")
+        if value:
+            hours[column.removeprefix("hours_")] = value
+    return hours
+
+
 async def _subject_from_row(
     session: AsyncSession, ctx: AuthContext, row: dict[str, str], code: str
 ) -> Subject:
@@ -1284,8 +1329,7 @@ async def _subject_from_row(
             kind=kind,  # type: ignore[arg-type]
             elective_group=group,  # type: ignore[arg-type]
             credits=_whole_number(row, "credits", 0, 30) or 0,
-            theory_hours=_whole_number(row, "theory_hours", 0, 40) or 0,
-            lab_hours=_whole_number(row, "lab_hours", 0, 40) or 0,
+            hours=_component_hours_from_row(row),
         )
     except ValueError as err:
         raise _OrgRowError("kind", str(err)) from None
@@ -1374,3 +1418,130 @@ def _read_csv(
         for index, raw in enumerate(reader, start=2)
     ]
     return rows, []
+
+
+# --- subject components (how a subject is taught) -----------------------------
+
+
+async def list_components(session: AsyncSession) -> Sequence[SubjectComponent]:
+    """The university-wide catalogue of ways a subject can be taught."""
+    return await dao.list_components(session)
+
+
+async def components_for_school(
+    session: AsyncSession, school_id: uuid.UUID
+) -> list[dict[str, object]]:
+    """Components with a flag for whether this School teaches in them.
+
+    A School that has never chosen falls back to the shipped defaults rather
+    than an empty form — otherwise adding this feature would have silently
+    emptied every existing School's subject form.
+    """
+    components = await dao.list_components(session)
+    chosen = set(await dao.school_component_ids(session, school_id))
+    return [
+        {
+            "id": component.id,
+            "code": component.code,
+            "name": component.name,
+            "enabled": (component.id in chosen) if chosen else component.default_enabled,
+        }
+        for component in components
+    ]
+
+
+async def set_school_components(
+    session: AsyncSession, ctx: AuthContext, school_id: uuid.UUID, codes: list[str]
+) -> list[dict[str, object]]:
+    """Choose which components a School teaches in (locked 05-08-2026)."""
+    school = await _get_or_404(session, school_id)
+    if school.type != "school":
+        raise HTTPException(
+            status_code=422, detail="Subject components are enabled per School."
+        )
+    components = {c.code: c for c in await dao.list_components(session)}
+    unknown = [code for code in codes if code not in components]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown component(s): {', '.join(unknown)}. Available: "
+            f"{', '.join(sorted(components))}.",
+        )
+    await dao.set_school_components(session, school_id, [components[c].id for c in codes])
+    await audit_service.record(
+        session,
+        actor=ctx.user_id,
+        action="org.school-components.set",
+        object_type="org_unit",
+        object_id=str(school_id),
+        scope=school.path,
+        after={"components": sorted(codes)},
+    )
+    await session.commit()
+    return await components_for_school(session, school_id)
+
+
+async def _write_component_hours(
+    session: AsyncSession, subject: Subject, hours: dict[str, int] | None
+) -> None:
+    """Replace a subject's taught hours. Keys are component codes.
+
+    Validated against the School that owns the subject: recording clinical hours
+    on an Engineering subject is a mistake, not a preference, and catching it
+    here keeps the catalogue meaningful.
+    """
+    if not hours:
+        return
+    components = {c.code: c for c in await dao.list_components(session)}
+    unknown = [code for code in hours if code not in components]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown component(s): {', '.join(unknown)}. Available: "
+            f"{', '.join(sorted(components))}.",
+        )
+
+    school_id = await dao.ancestor_of_type(session, subject.department_id, "school")
+    if school_id is not None:
+        enabled = {
+            cast(str, row["code"])
+            for row in await components_for_school(session, school_id)
+            if row["enabled"]
+        }
+        disallowed = [code for code, value in hours.items() if value > 0 and code not in enabled]
+        if disallowed:
+            school = await _get_or_404(session, school_id)
+            raise HTTPException(
+                status_code=422,
+                detail=f"{school.name} does not teach in: {', '.join(sorted(disallowed))}. "
+                "Enable it for the School first.",
+            )
+
+    await dao.replace_component_hours(
+        session, subject.id, {components[code].id: value for code, value in hours.items()}
+    )
+
+
+def _subject_row(subject: Subject, hours: dict[str, int]) -> dict[str, object]:
+    return {
+        "id": subject.id,
+        "code": subject.code,
+        "name": subject.name,
+        "department_id": subject.department_id,
+        "kind": subject.kind,
+        "elective_group": subject.elective_group,
+        "credits": subject.credits,
+        "hours": hours,
+        "status": subject.status,
+    }
+
+
+async def subject_hours(
+    session: AsyncSession, subject_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, dict[str, int]]:
+    """Component code -> hours, per subject."""
+    raw = await dao.component_hours(session, subject_ids)
+    return {
+        subject_id: {component.code: hours for component, hours in rows}
+        for subject_id, rows in raw.items()
+    }

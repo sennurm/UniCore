@@ -270,7 +270,7 @@ class OrgImportResult(BaseModel):
 
 SUBJECT_KINDS = ("core", "elective")
 ELECTIVE_GROUPS = ("general", "professional", "open")
-VENUE_KINDS = ("classroom", "lab", "seminar", "auditorium", "workshop")
+VENUE_KINDS = ("classroom", "lab", "seminar", "auditorium", "workshop", "field")
 
 
 class SubjectCreate(BaseModel):
@@ -280,8 +280,10 @@ class SubjectCreate(BaseModel):
     kind: Literal["core", "elective"] = "core"
     elective_group: Literal["general", "professional", "open"] | None = None
     credits: int = Field(default=0, ge=0, le=30)
-    theory_hours: int = Field(default=0, ge=0, le=40)
-    lab_hours: int = Field(default=0, ge=0, le=40)
+    # Component code -> weekly hours, e.g. {"theory": 2, "clinical": 4}. A
+    # Nursing subject is routinely taught two ways at once, which is why this is
+    # a map rather than a pair of columns.
+    hours: dict[str, int] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _group_matches_kind(self) -> "SubjectCreate":
@@ -297,8 +299,9 @@ class SubjectCreate(BaseModel):
 class SubjectUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     credits: int | None = Field(default=None, ge=0, le=30)
-    theory_hours: int | None = Field(default=None, ge=0, le=40)
-    lab_hours: int | None = Field(default=None, ge=0, le=40)
+    # Supplying this replaces the subject's hours wholesale; omitting it leaves
+    # them alone, so a rename cannot accidentally wipe the teaching pattern.
+    hours: dict[str, int] | None = None
 
 
 class SubjectOut(BaseModel):
@@ -309,11 +312,23 @@ class SubjectOut(BaseModel):
     kind: str
     elective_group: str | None
     credits: int
-    theory_hours: int
-    lab_hours: int
+    hours: dict[str, int] = Field(default_factory=dict)
     status: str
 
     model_config = {"from_attributes": True}
+
+
+class SubjectComponentOut(BaseModel):
+    id: uuid.UUID
+    code: str
+    name: str
+    enabled: bool
+
+
+class SchoolComponentsUpdate(BaseModel):
+    """The component codes a School teaches in."""
+
+    codes: list[str] = Field(max_length=20)
 
 
 class OfferingCreate(BaseModel):
@@ -348,7 +363,9 @@ class VenueCreate(BaseModel):
     code: str = Field(min_length=1, max_length=30, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field(min_length=1, max_length=150)
     capacity: int = Field(ge=1, le=2000)
-    kind: Literal["classroom", "lab", "seminar", "auditorium", "workshop"] = "classroom"
+    kind: Literal["classroom", "lab", "seminar", "auditorium", "workshop", "field"] = (
+        "classroom"
+    )
     campus_code: str | None = Field(default=None, max_length=50)
     building: str | None = Field(default=None, max_length=100)
     room: str | None = Field(default=None, max_length=50)
@@ -357,7 +374,9 @@ class VenueCreate(BaseModel):
 class VenueUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     capacity: int | None = Field(default=None, ge=1, le=2000)
-    kind: Literal["classroom", "lab", "seminar", "auditorium", "workshop"] | None = None
+    kind: Literal["classroom", "lab", "seminar", "auditorium", "workshop", "field"] | None = (
+        None
+    )
     campus_code: str | None = Field(default=None, max_length=50)
     building: str | None = Field(default=None, max_length=100)
     room: str | None = Field(default=None, max_length=50)
@@ -377,6 +396,9 @@ class VenueOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# One column per component. The importer accepts any `hours_<code>` column, so a
+# component added to the university catalogue works immediately; only this
+# template's shipped columns lag until it is listed here.
 SUBJECT_CSV_COLUMNS = (
     "subject_code",
     "subject_name",
@@ -384,8 +406,11 @@ SUBJECT_CSV_COLUMNS = (
     "kind",
     "elective_group",
     "credits",
-    "theory_hours",
-    "lab_hours",
+    "hours_theory",
+    "hours_lab",
+    "hours_field_work",
+    "hours_clinical",
+    "hours_project",
     "programme_code",
     "position",
 )
@@ -407,8 +432,7 @@ register(
                 "kind": "core",
                 "elective_group": "",
                 "credits": "4",
-                "theory_hours": "4",
-                "lab_hours": "0",
+                "hours_theory": "4",
                 "programme_code": "BT-CSE",
                 "position": "1",
             },
@@ -421,8 +445,7 @@ register(
                 "kind": "core",
                 "elective_group": "",
                 "credits": "4",
-                "theory_hours": "4",
-                "lab_hours": "0",
+                "hours_theory": "4",
                 "programme_code": "BT-AIDS",
                 "position": "1",
             },
@@ -433,10 +456,23 @@ register(
                 "kind": "elective",
                 "elective_group": "professional",
                 "credits": "3",
-                "theory_hours": "3",
-                "lab_hours": "2",
+                "hours_theory": "3",
+                "hours_lab": "2",
                 "programme_code": "BT-CSE",
                 "position": "5",
+            },
+            {
+                # Nursing: taught two ways at once. One subject, two components.
+                "subject_code": "NUR201",
+                "subject_name": "Medical-Surgical Nursing",
+                "department_code": "NURS",
+                "kind": "core",
+                "elective_group": "",
+                "credits": "6",
+                "hours_theory": "2",
+                "hours_clinical": "8",
+                "programme_code": "BSC-NURS",
+                "position": "3",
             },
             {
                 # An OPEN elective is common to the whole university: leave
@@ -447,8 +483,7 @@ register(
                 "kind": "elective",
                 "elective_group": "open",
                 "credits": "2",
-                "theory_hours": "2",
-                "lab_hours": "0",
+                "hours_theory": "2",
                 "programme_code": "",
                 "position": "",
             },
@@ -477,6 +512,14 @@ register(
             "position is the ladder position the subject is taught at — the "
             "semester number for a semester-cadence Programme, the year number "
             "for a yearly one.",
+            "HOURS are per component, one column each: hours_theory, hours_lab, "
+            "hours_field_work, hours_clinical, hours_project. A subject can use "
+            "several at once — a Nursing subject is commonly 2 theory + 8 "
+            "clinical. Leave a column blank where the subject is not taught that "
+            "way.",
+            "A School only accepts the components it teaches in. If a row is "
+            "rejected for an unavailable component, enable it for that School on "
+            "Subjects & venues first.",
             "Re-uploading is safe: subjects match on subject_code and offerings on "
             "(subject, programme, position); neither is duplicated.",
         ),
@@ -513,7 +556,7 @@ register(
         ),
         notes=(
             "SAMPLE DATA — replace the rows below with your own before uploading.",
-            "kind is one of: classroom, lab, seminar, auditorium, workshop. It "
+            "kind is one of: classroom, lab, seminar, auditorium, workshop, field. It "
             "matters because a lab block must be scheduled in a lab.",
             "Venues are university-wide, not owned by a School: clash detection "
             "spans the whole university, so a room cannot host two sessions even "

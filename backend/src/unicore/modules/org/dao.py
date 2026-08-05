@@ -3,13 +3,16 @@
 import uuid
 from collections.abc import Sequence
 
-from sqlalchemy import cast, func, literal, select, text
+from sqlalchemy import cast, delete, func, literal, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.modules.org.models import (
     Ltree,
     OrgUnit,
+    SchoolSubjectComponent,
     Subject,
+    SubjectComponent,
+    SubjectComponentHours,
     SubjectOffering,
     UniversitySetting,
     Venue,
@@ -339,3 +342,83 @@ async def list_venues(
         )
     result = await session.execute(query)
     return result.scalars().all()
+
+
+# --- subject components -------------------------------------------------------
+
+
+async def list_components(session: AsyncSession) -> Sequence[SubjectComponent]:
+    result = await session.execute(
+        select(SubjectComponent)
+        .where(SubjectComponent.status == "active")
+        .order_by(SubjectComponent.sequence)
+    )
+    return result.scalars().all()
+
+
+async def get_component_by_code(
+    session: AsyncSession, code: str
+) -> SubjectComponent | None:
+    result = await session.execute(
+        select(SubjectComponent).where(SubjectComponent.code == code)
+    )
+    return result.scalar_one_or_none()
+
+
+async def school_component_ids(
+    session: AsyncSession, school_id: uuid.UUID
+) -> list[uuid.UUID]:
+    result = await session.execute(
+        select(SchoolSubjectComponent.component_id).where(
+            SchoolSubjectComponent.school_id == school_id
+        )
+    )
+    return list(result.scalars().all())
+
+
+async def set_school_components(
+    session: AsyncSession, school_id: uuid.UUID, component_ids: list[uuid.UUID]
+) -> None:
+    await session.execute(
+        delete(SchoolSubjectComponent).where(SchoolSubjectComponent.school_id == school_id)
+    )
+    for component_id in component_ids:
+        session.add(
+            SchoolSubjectComponent(school_id=school_id, component_id=component_id)
+        )
+    await session.flush()
+
+
+async def component_hours(
+    session: AsyncSession, subject_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[tuple[SubjectComponent, int]]]:
+    """Hours per component for a set of subjects — one query for the whole list,
+    because the catalogue screen asks for every subject at once."""
+    if not subject_ids:
+        return {}
+    result = await session.execute(
+        select(SubjectComponentHours, SubjectComponent)
+        .join(SubjectComponent, SubjectComponent.id == SubjectComponentHours.component_id)
+        .where(SubjectComponentHours.subject_id.in_(subject_ids))
+        .order_by(SubjectComponent.sequence)
+    )
+    out: dict[uuid.UUID, list[tuple[SubjectComponent, int]]] = {}
+    for row, component in result.all():
+        out.setdefault(row.subject_id, []).append((component, row.hours))
+    return out
+
+
+async def replace_component_hours(
+    session: AsyncSession, subject_id: uuid.UUID, hours: dict[uuid.UUID, int]
+) -> None:
+    await session.execute(
+        delete(SubjectComponentHours).where(SubjectComponentHours.subject_id == subject_id)
+    )
+    for component_id, value in hours.items():
+        if value > 0:  # zero hours is simply "not taught this way"
+            session.add(
+                SubjectComponentHours(
+                    subject_id=subject_id, component_id=component_id, hours=value
+                )
+            )
+    await session.flush()

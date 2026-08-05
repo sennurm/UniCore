@@ -140,7 +140,9 @@ class OrgUnit(Base):
 SUBJECT_KINDS = ("core", "elective")
 # A student chooses one subject within each group they are offered.
 ELECTIVE_GROUPS = ("general", "professional", "open")
-VENUE_KINDS = ("classroom", "lab", "seminar", "auditorium", "workshop")
+# "field" covers off-campus teaching sites — a hospital ward, a village, a farm —
+# so field work is clash-checked and recorded like any other class.
+VENUE_KINDS = ("classroom", "lab", "seminar", "auditorium", "workshop", "field")
 
 
 class Subject(Base):
@@ -172,8 +174,6 @@ class Subject(Base):
         Enum(*ELECTIVE_GROUPS, name="elective_group", create_type=False), nullable=True
     )
     credits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    theory_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    lab_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status: Mapped[str] = mapped_column(
         Enum("active", "deactivated", name="org_unit_status", create_type=False),
         nullable=False,
@@ -253,3 +253,57 @@ class Venue(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class SubjectComponent(Base):
+    """A way a subject is taught — theory, lab, field work, clinical, project.
+
+    Defined university-wide so credit and workload reporting stay comparable
+    across Schools; each School enables the ones it actually teaches, so a
+    Nursing form offers clinical and an Engineering form does not. A School that
+    has never chosen sees the `default_enabled` set rather than an empty form.
+    """
+
+    __tablename__ = "subject_components"
+    __table_args__ = (UniqueConstraint("code", name="uq_subject_component_code"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    code: Mapped[str] = mapped_column(String(30), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=99)
+    default_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    status: Mapped[str] = mapped_column(
+        Enum("active", "deactivated", name="org_unit_status", create_type=False),
+        nullable=False,
+        default="active",
+    )
+
+
+class SchoolSubjectComponent(Base):
+    """Which components a School teaches. Absence of any row means "defaults"."""
+
+    __tablename__ = "school_subject_components"
+
+    school_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("org_units.id"), primary_key=True)
+    component_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subject_components.id"), primary_key=True
+    )
+
+
+class SubjectComponentHours(Base):
+    """Hours a subject is taught in one component.
+
+    A row per component rather than a column per component: a Nursing subject is
+    routinely theory *and* clinical at once, and the set of components is
+    configuration rather than schema.
+    """
+
+    __tablename__ = "subject_component_hours"
+
+    subject_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subjects.id", ondelete="CASCADE"), primary_key=True
+    )
+    component_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("subject_components.id"), primary_key=True
+    )
+    hours: Mapped[int] = mapped_column(Integer, nullable=False)
