@@ -9,7 +9,7 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 ## 2. Goals & Non-Goals
 
 **Goals**
-- Term setup: per-School academic calendars (uploaded by School office staff, School Incharge-approved, versioned — start/end dates, exam-date ranges, special-event dates, term-archival backstop date), campus holiday calendars (System Admin), and per-campus/per-School period-grid definitions (Schools may have different period structures).
+- Term setup: per-School academic calendars (uploaded by School office staff, School Incharge-approved, versioned — start/end dates, exam-date ranges, special-event dates, term-archival backstop date), the **university holiday calendar** (System Admin, date ranges, optionally campus-tagged), each School's **working-day pattern** (School Incharge — which weekdays it teaches, so a Nursing School can run weekends), and per-School period-grid definitions (Schools may have different period structures).
 - **Section-instance creation:** the Timetable Cell creates each term's Section instances during term setup — Sections are per-term entities (Program × term × label); ONB allotment and draft authoring depend on them existing.
 - Manual timetable construction per Section per term by the Timetable Cell, with save-time clash detection (hard blocks, not warnings).
 - Lab blocks with student lab groups; elective slots with elective groups; combined classes.
@@ -37,9 +37,9 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 | Department admin staff | Elective-group creation and student-to-group assignment within their Department, within capacity |
 | Faculty Members | Read own published timetable (all versions); notified on changes and substitute assignments |
 | Students | Read own published timetable (Section + lab group + elective view merged); notified on changes |
-| System Admin | Venue master data, campus holiday calendars |
+| System Admin | Venue master data; the **university holiday calendar** (TTM-FR-26) — university-owned, entries optionally tagged to campuses |
 | School office staff (Admin/office staff of a School) | Upload the School's per-term academic calendar (start/end, exam dates, special events) for School Incharge approval |
-| School Incharge | Approve the School academic calendar and its amendments (recorded, versioned) |
+| School Incharge | Approve the School academic calendar and its amendments (recorded, versioned); set the School's **working-day pattern**, its per-term override, and its dated exceptions (TTM-FR-27) — including declaring the School working on a university holiday |
 | Executives (Principal / Faculty Dean / School Incharge) | Read-only dashboards of published timetables in their scope |
 
 **Denied:** faculty and students never see drafts. Nobody outside the Timetable Cell (plus System Admin for master data) can mutate a timetable; HoDs approve and request, they do not edit slots directly.
@@ -50,7 +50,11 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 
 | Action | Allowed | Enforced at |
 |---|---|---|
-| Define campus holiday calendar, venue master | System Admin (campus scope) | API + service layer |
+| Maintain the **university holiday calendar** (add/amend/remove entries, incl. campus tags) | System Admin (university scope) | API + service layer |
+| Venue master data | System Admin | API + service layer |
+| Set a School's **standing working-day pattern** (weekday flags + nth-weekday rules) | School Incharge (own School) — direct edit, audited before/after; no separate approval step, because the School Incharge is already the approver for every School-scoped decision | API + service layer |
+| Override the working pattern **for one term** | School Incharge (own School) | API + service layer |
+| Add a dated **working / non-working exception** (incl. "follows Monday's timetable") | School Incharge (own School) | API + service layer |
 | Upload School academic calendar (term dates, exam dates, special events, archival backstop) | School office staff (own School); becomes active only on School Incharge approval | API + service layer |
 | Apply one calendar to **several Schools at once** (`ttm:term-upload-multi`) | Super Admin, System Admin, Registrar, Dean Academic Affairs — university-level only; fans out to one draft per School, each still approved by its own School Incharge | API + service layer |
 | Approve School academic calendar / amendment | School Incharge (own School); approval recorded, versions kept | API (workflow) |
@@ -84,16 +88,21 @@ The central **Timetable Cell** (one per campus) builds per-Section timetables fo
 9b. **Class swaps:** Faculty Member A proposes exchanging specific Period occurrences with Faculty Member B (each must be the assigned/substitute/swapped-in teacher of the occurrences offered). Both directions are clash-checked at proposal AND at acceptance (state may have changed between). On B's acceptance the swap **commits immediately** — mutual occurrence-level reassignment, session-open rights follow (ATT), and the HoD(s) of both members are notified (informed, not a gate) with the swap details. Audited end to end. Either party may cancel a committed swap before the first swapped occurrence (counterpart + HoDs notified); after that, changes go through substitution. A swapped-in occurrence cannot be re-swapped — one hop only; the HoD can still substitute over it.
 10. **Subject allocation is term-bound.** A Faculty Member's allocation to a subject in a Section exists only inside that term's published timetable and confers no rights beyond the term. When PRM ratification closes a Section's cohort (see 06-student-promotion.md), the Section's timetable for that term is **archived**: no new Sessions can be opened from it, substitutions on it are rejected, and it remains readable as historical record only. The new term's teaching rights exist only once the new term's timetable is published — nothing carries over automatically, even for the same Faculty Member teaching the same subject. A PRM rollback (within its window) un-archives the affected Section's timetable together with the AUTH grant restore.
 
+11. **Calendar resolution is most-specific-wins (locked 05-08-2026).** Whether a given date is a teaching day *for a given School* is answered by four layers, narrowest first: (a) a dated School exception, (b) the School declaring itself working on a university holiday, (c) the university holiday calendar, (d) the School's working-day pattern for that term. Exactly one layer decides, and the resolver reports **which** — a student asking "why do I have class on Sunday?" gets a traceable answer rather than a guess.
+12. **A class cannot be placed on a day the School does not teach.** Authoring an entry on a non-working weekday is a hard save-time block naming the School's working days, on the same footing as a clash: an entry on a non-working day generates no Session ever, so it is always an error rather than a judgement call.
+13. **A working day cannot be withdrawn under records that already exist.** Narrowing the calendar — declaring a holiday, turning a weekday off, adding a non-working exception — is refused when the affected dates already carry **captured attendance** (the refusal names the sessions), and refused when a **published timetable for a live term teaches on that weekday** (the refusal names the entries). Widening the calendar is always allowed. Attendance underpins UGC minimum-attendance and exam eligibility, so it is never silently voided by an administrative edit.
+
 ### Audit
 
-Every publish/republish (version, diff, approver chain), clash-override attempt (there are none — blocks are absolute; the attempt itself is logged), capacity acknowledgment, substitute assignment, and elective-group change writes to the central audit service with actor, timestamp, before/after, and reason where mandated.
+Every calendar mutation — holiday entry created/amended/removed, working-pattern change (before/after), term override, dated exception, and every refusal under business rule 13 — plus every publish/republish (version, diff, approver chain), clash-override attempt (there are none — blocks are absolute; the attempt itself is logged), capacity acknowledgment, substitute assignment, and elective-group change writes to the central audit service with actor, timestamp, before/after, and reason where mandated.
 
 ## 5. Legal & Regulatory Requirements
 
 - **UGC/AICTE:** published timetables underpin minimum-attendance computation (75%-type norms, School-configurable per the PRM doc); therefore Period → Session traceability must be lossless across republishes — every delivered Session records the timetable version it was scheduled under.
 - **DPDP purpose limitation:** timetable data includes personal data (faculty assignments, student group memberships); visibility is org-scoped per §3 — no public timetable exports carrying student lists. Faculty workload views expose only what the viewer's scope permits.
 - **DPDP correction rights:** a Faculty Member disputing their assignment (e.g., wrongly rostered) raises it via the HoD/Timetable Cell change flow; the AUTH grievance mechanism covers profile data, not scheduling disputes — this doc's change flow is the remedy and must respond within a defined SLA (§9).
-- Localization: all Periods stored and displayed in IST; DD-MM-YYYY; the week structure (working Saturdays etc.) comes from the campus calendar.
+- Localization: all Periods stored and displayed in IST; DD-MM-YYYY; the week structure — which weekdays teach, working Saturdays, weekend-teaching Schools — comes from the **School working-day pattern** (TTM-FR-27), not from a campus calendar. Holiday dates are IST calendar dates with no time component; a holiday is the whole day.
+- **DPDP:** the calendar itself carries no personal data — holiday labels and working-day rules are institutional facts. Its audit trail names the actor who changed what, which is the same university-wide behaviour AUTH already applies; no additional consent or residency handling arises.
 
 ## 6. User Stories & Acceptance Criteria
 
@@ -119,9 +128,21 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 - Given the substitute is free that slot, when I assign for 2 dates, then the substitute can open those Sessions (ATT doc), the original assignment remains in the published version, and the substitution is audited.
 - Given the proposed substitute already teaches in that slot, when I assign, then the assignment is rejected as a clash.
 
+**US-TTM-7** — As a School Incharge of the School of Nursing, I declare that my School teaches Saturday and Sunday so that clinical postings appear on the timetable and are attended.
+- Given my School's pattern enables all seven days, when the Timetable Cell places a Sunday clinical posting, then it saves, appears in the authoring grid, and appears in the students' and the faculty member's published week.
+- Given a university holiday falls on a date my students are on ward posting, when I declare my School working on that date with a reason, then that date remains a teaching day for my School alone and the declaration is audited.
+- Given an Engineering School whose pattern excludes Sunday, when its Timetable Cell places a Sunday class, then the save is rejected naming that School's working days.
+
+**US-TTM-8** — As a System Admin, I publish the university holiday list so that every School's calendar, leave balances, and recurring tasks agree on which dates are closed.
+- Given I add a vacation block as one date range, when it is saved, then every day in the range resolves as non-working for every School that has not overridden it.
+- Given a date inside the range already has captured attendance, when I save, then the change is refused naming the affected sessions and nothing is written.
+
 ## 7. Functional Requirements
 
-- TTM-FR-01: Term setup: campus holiday/working-day calendar (System Admin, per campus) + **School academic calendar** per term per TTM-FR-18; term dates are per School, not per campus (one campus hosts semester- and year-based Schools simultaneously).
+- TTM-FR-01: Term setup: the **university holiday calendar** (TTM-FR-26) + the **School working-day pattern** (TTM-FR-27) + the **School academic calendar** per term per TTM-FR-18; term dates are per School, not per campus (one campus hosts semester- and year-based Schools simultaneously). *(Superseded 05-08-2026: this requirement previously placed a combined holiday/working-day calendar at **campus** scope under System Admin. Holidays are now university-owned with an optional campus tag, and working days are a **School** attribute — because a Medical or Nursing School teaching weekends differs from the Engineering School on the same campus, which a campus-scoped calendar cannot express.)*
+- TTM-FR-26: **University holiday calendar.** Maintained by System Admin at university scope. Each entry is a **date range** (`from`, `to` — a single-day holiday is a one-day range) with a label and a **kind**: `public` (Republic Day, Pongal), `vacation` (semester break), or `local` (a one-off institutional closure). An entry applies university-wide by default and may optionally name one or more **campuses**, so a regional festival observed at one location does not close the others. Ranges are the unit of amendment: a vacation block moves as one edit, not fourteen. Entries are dated facts, not term-scoped — the calendar spans academic years and is queried by date.
+- TTM-FR-27: **School working-day pattern.** Each School declares which weekdays it teaches. The pattern is **seven weekday flags plus an optional nth-weekday qualification per day** — "Saturdays: 1st and 3rd", "Saturdays: 2nd and 4th", or every occurrence — which is how alternate-Saturday Schools are expressed without entering twelve dates a term. A School of Nursing or Medicine may enable all seven days; an Engineering School typically runs Monday–Saturday. The pattern **stands on the School**, so every new term inherits it and nobody re-enters it; a term may carry an **override** when that semester genuinely differs. Set directly by the School Incharge and audited before/after — deliberately no draft/approve cycle, since the School Incharge is the approver for everything else School-scoped and would only be approving themselves. Beyond the pattern, a School may record **dated exceptions**: a specific date marked non-working, or marked working. A working exception may name **the weekday whose timetable it follows** — "14-11-2026 is working, follow Monday" — which is how a compensatory Saturday after a mid-week holiday is expressed; without it the sessions for that day cannot be generated at all. The unit is the **School**: no per-Department or per-Programme patterns; a Department that genuinely differs is recorded as School-level dated exceptions.
+- TTM-FR-28: **Calendar resolution service.** One question — "is date D a teaching day for School S, and if so which weekday's timetable does it run?" — answered by the precedence in §4 rule 11, returning the decision, the **layer that decided it**, and the effective weekday. This is the single source consumed by ATT session expansion (dated Sessions exist only for resolved working days), TSK holiday-aware recurrence (TSK-FR-14), LVE working-day balance decrement (LVE-FR-06), and the TTM authoring guard in §4 rule 12. It also exposes a **range** form — the working days for a School between two dates — because expanding a term is the dominant call and issuing one query per date does not scale.
 - TTM-FR-02: Period-grid definition per School: named Periods with start/end times; different Schools may run different grids; grids are **versioned and never edited in place** (a change would silently move classes for people already holding the published schedule), and a new version supersedes the last. Overlapping Periods within one grid are refused at creation — they would make every Section in the School clash with itself. Grid changes mid-term require versioned republish of affected timetables.
 - TTM-FR-03: Draft timetable authoring per Section per term: assign course, Faculty Member, venue to each Period.
 - TTM-FR-04: Save-time hard clash detection across Faculty Member, venue, and student obligations (Section/lab-group/elective-group union, membership-as-of-date). **Drafts collide with drafts as well as with published timetables** (locked 02-08-2026): a room taken by another School's unpublished draft is a real conflict, and catching it at save time is cheaper than at publish. Overlap is half-open, so a class ending at 10:00 does not clash with one starting at 10:00. Superseded and archived timetables are ignored — they are history. Clashes are re-checked at publish, because another School may have published into a shared room while the draft waited for approval. Spanning Schools and grids by absolute time overlap — not by Period index.
@@ -167,6 +188,16 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 | Multi-School calendar applied where one School already has that term approved | **DECISION:** that School gets a new draft **version** (amend-and-supersede, TTM-FR-18), never an overwrite, and never an auto-approval. The per-School result is reported as created / versioned / skipped. |
 | Multi-School calendar: one School Incharge approves, another does not | **DECISION:** entirely independent — the approving School's term is active while the other's stays draft. This is the intended consequence of fanning out rather than sharing a record. |
 | A School Incharge amends the dates the university proposed | **DECISION:** allowed. The multi-School upload is a proposal; the School Incharge owns their calendar and their amendment simply creates the next version for their School alone. |
+| School has no working-day pattern set | **DECISION:** a School with no pattern falls back to the shipped default (Monday–Saturday, all Saturdays) rather than resolving to zero teaching days. A School that has never been configured must not silently produce a term with no classes. The fallback is reported as such in the resolver's answer so it is visible rather than assumed. |
+| University holiday lands on a day a School does not teach anyway | **DECISION:** no-op, and not an error. The date is already non-working for that School; the holiday changes nothing and no exception is required. |
+| School declares itself working on a university **vacation block** (a two-week break) | **DECISION:** allowed, and the override applies to whichever dates in the range the School names — not necessarily the whole block. A Nursing School running ward postings through the first week of a break declares that week, not the break. |
+| Nth-weekday rule where the month has five Saturdays | **DECISION:** "1st and 3rd" means the 1st and 3rd occurrences of that weekday in the calendar month; a fifth Saturday is simply not among them, so it is non-working. Counting is by occurrence within the month, never by ISO week number, which would drift across month boundaries. |
+| Compensatory day names a weekday the School does not teach | **DECISION:** refused. "Sunday follows Sunday" for a School that does not teach Sunday yields an empty day — the exception is rejected naming the School's working days rather than creating a working date with nothing on it. |
+| Compensatory day already has its own timetable (Saturday follows Monday, but Saturday classes exist) | **DECISION:** the named weekday wins for that date — the day runs Monday's schedule, and Saturday's own entries do not run. This is what "follows Monday" means; running both would double-book every student. The resolver reports the substitution so the published view can label the day. |
+| Holiday added over a date with captured attendance | **DECISION:** refused, naming the affected sessions (§4 rule 13). Attendance gates exam eligibility under UGC norms; an administrative edit never voids it. The remedy is to correct attendance first, deliberately and audibly, then declare the holiday. |
+| School turns Saturday off while its published timetable teaches on Saturday | **DECISION:** refused, naming the entries that would be orphaned. Widening (turning a day on) is always allowed. Withdrawing a taught day requires republishing the timetable without it first. |
+| Working pattern changed mid-term | **DECISION:** the change applies from the date of the change forward; already-generated Sessions and captured attendance stand as historical fact. Retroactive reinterpretation of a term that has already been taught is never performed. |
+| Holiday range overlaps another holiday range | **DECISION:** allowed and idempotent — a date covered by two entries is simply non-working; the resolver names the narrower entry as the deciding one. Overlaps happen legitimately (a public holiday inside a vacation block) and are not worth refusing. |
 | Two Timetable Cell members edit the same Section draft concurrently | Optimistic locking per Section-draft: second save on a stale version is rejected with a refresh prompt. No silent merge. |
 | Clash created indirectly (re-allotted student now double-booked via elective group) | Membership changes (ONB) trigger a re-validation job; conflicts surface in a Timetable Cell "new conflicts" queue. Published timetable stands; Department admin must move the student's group (or Section fix via ONB) within the SLA — the student is never left with two simultaneous obligations silently. |
 | Combined class where one Section's HoD approved, the other rejected | Publish blocked until every covered HoD approves. Rejection reason routes to the Timetable Cell; the combined entry is edited or split. |
@@ -196,11 +227,13 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 - Full-draft validation (pre-publish check of one Section): < 10 s; whole-campus re-validation job after membership changes: < 15 min, run off-peak plus on-demand.
 - Publish (version creation + visibility flip): < 30 s; notifications fan out to all affected users < 10 min after publish.
 - Timetable read (personal view): < 500 ms (p95); read availability 99.5% during academic hours (ATT depends on it at every Session open).
+- Calendar resolution: a single date < 50 ms; the range form for one School across a full term (~180 dates) < 500 ms (p95) — ATT expands a term for ~500 Sections against it, so a per-date round trip is not acceptable.
 - Change-request SLA (faculty disputes per §5): Timetable Cell response within 2 working days, tracked in-app.
 - Version history retained for the statutory academic-record period (aligned with AUTH 7-year audit retention); every Session permanently linked to its scheduling version.
 
 ## 10. Assumptions
 
+- The attendance guard in §4 rule 13 is specified now and enforced through a **registered checker** — ATT plugs in when it is built, exactly as the org module already takes a position reader from ONB at startup. Until then the checker answers "no captured attendance", so the rule is live and tested from day one and needs no rework later.
 - Venue master data (rooms, labs, capacities, campus) is maintainable by System Admin before timetable authoring starts; venues belong to exactly one campus.
 - Subject catalogue: the **org module** owns it (locked 31-07-2026 — previously unowned, which blocked this module entirely). A **Subject** belongs to the Department that teaches it and carries code, name, kind (core/elective), elective group, credits and a map of **teaching-component hours**; a **SubjectOffering** places it at (Programme, position), so one subject serves many Programmes. An offering may instead be **university-wide** — no Programme, no position — which is how an **Open** elective is published: common to the whole university, choosable by any student in any term (locked 02-08-2026). Expressing that as one offering per Programme would mean 113 rows that immediately drift; the single row also means a single shared seat pool, so capacity is competed for university-wide. General and Professional electives stay Programme-bound, being discipline-specific by definition. TTM references offerings and does not define them.
 - **Teaching components (locked 05-08-2026):** hours are recorded per *component* — `theory`, `lab`, `field_work`, `clinical`, `project` — not as a fixed theory/lab pair, because Medicine, Nursing and Agriculture teach the same subject two ways at once (a Nursing subject may be 2 theory + 8 clinical). The component list is **university-owned**; each **School enables the ones it teaches in** (a School that has never chosen falls back to the shipped defaults, theory + lab), and a subject may only carry hours for a component its owning School has enabled. Core/elective stays a separate, fixed attribute — it drives elective groups, student choice and capacity, and must not be confused with how a subject is delivered. A component is timetabled and clash-checked exactly like any other class; nothing about scheduling changes.
@@ -213,6 +246,8 @@ Every publish/republish (version, diff, approver chain), clash-override attempt 
 
 - **Student self-selection of electives (post-MVP):** should students pick elective groups themselves with first-come-first-served capacity? Proposed: yes post-MVP, with a selection window and waitlist; MVP stays Department-admin-assigned as locked.
 - Should HoD approval be delegable (e.g., to a Department timetable coordinator) via a scoped role grant? Proposed: yes, using the standard AUTH time-bound grant mechanism — no new workflow needed.
+- Should a **half-day** working date be representable (a Saturday that teaches only the morning half of the grid)? Proposed: not now — it needs per-date period selection, which is the per-date custom grid deliberately left out of scope. Revisit if Schools ask.
+- Should the university holiday calendar seed from a published Indian public-holiday source rather than manual entry? Proposed: manual for MVP — the list is short, changes yearly, and campus-specific observance makes an external feed only a starting point.
 - Minimum notice for republish effective dates (next-day per §8, or configurable 48 h per School)? Proposed default: next calendar day, School-configurable later.
 
 ## 12. Flow Diagram
@@ -240,6 +275,35 @@ flowchart TD
   J --> K[Diff notifications to affected users · past Sessions stay on N]
   I1 --> H
   K --> H
+```
+
+### Calendar resolution (TTM-FR-28)
+
+```mermaid
+flowchart TD
+  A[Question: is date D a teaching day for School S?] --> B{Dated exception for S on D?}
+  B -- Non-working --> B1[NOT a teaching day · decided by: school-exception]
+  B -- Working --> B2[Teaching day · runs the named weekday's timetable<br/>if none named, D's own weekday · decided by: school-exception]
+  B -- None --> C{University holiday covers D?<br/>range match + campus tag}
+  C -- Yes --> D{S declared itself working on D?}
+  D -- Yes --> D1[Teaching day · decided by: school-override]
+  D -- No --> D2[NOT a teaching day · decided by: university-holiday]
+  C -- No --> E{S's pattern for this term teaches D's weekday?<br/>flags + nth-weekday rule}
+  E -- No --> E1[NOT a teaching day · decided by: school-pattern]
+  E -- Yes --> E2[Teaching day · decided by: school-pattern]
+```
+
+Narrowing the calendar passes an extra gate before it commits:
+
+```mermaid
+flowchart TD
+  A[Actor narrows the calendar<br/>holiday added · weekday turned off · non-working exception] --> B{Authorized?<br/>System Admin for holidays · School Incharge for patterns}
+  B -- No --> B1[403 · attempt audited]
+  B -- Yes --> C{Any affected date carries captured attendance?}
+  C -- Yes --> C1[Refused · affected sessions named · nothing written]
+  C -- No --> D{Published timetable for a live term teaches that weekday?}
+  D -- Yes --> D1[Refused · orphaned entries named · republish first]
+  D -- No --> E[Commit · audit before/after · resolver answers change from here forward]
 ```
 
 ## 13. Test Cases
@@ -290,7 +354,23 @@ flowchart TD
 | TC-TTM-042 | One School approves, others unaffected | Happy | P0 | 8 drafts from one apply | School A's Incharge approves | A's term active; the other 7 remain draft | TTM-FR-25 |
 | TC-TTM-043 | Apply where a term is already approved | Boundary | P0 | School B holds approved 2026-S1 | Apply 2026-S1 to B | New draft v2 for B; v1 stays approved until v2 is approved; result reported as versioned | TTM-FR-25, TTM-FR-18 |
 | TC-TTM-044 | School Incharge amends the proposed dates | Happy | P1 | Draft from a multi-School apply | Incharge edits end date, approves | Amended dates active for that School only; other Schools unchanged | TTM-FR-25 |
+| TC-TTM-045 | Nursing School teaches Sunday | Happy | P0 | School of Nursing pattern enables all 7 days | Place a Sunday clinical posting; publish | Entry saves; appears in the authoring grid, the student's week and the faculty member's load | TTM-FR-27, US-TTM-7 |
+| TC-TTM-046 | Sunday blocked for a Mon–Sat School | Negative | P0 | Engineering School pattern excludes Sunday | Place a Sunday class | Save rejected naming the School's working days; nothing written | TTM-FR-27/28, §4 rule 12 |
+| TC-TTM-047 | Alternate Saturdays resolve correctly | Boundary | P0 | School pattern: Saturdays 1st and 3rd | Resolve every Saturday of a 5-Saturday month | 1st and 3rd are teaching days; 2nd, 4th and 5th are not | TTM-FR-27/28 |
+| TC-TTM-048 | Vacation block as one range | Happy | P0 | System Admin account | Add a 14-day vacation entry | All 14 dates resolve non-working for every School; one entry, not fourteen | TTM-FR-26, US-TTM-8 |
+| TC-TTM-049 | Campus-tagged holiday closes one campus | Boundary | P1 | Two campuses; holiday tagged to campus A | Resolve the date for a School on each campus | Non-working for A's School; teaching day for B's | TTM-FR-26 |
+| TC-TTM-050 | School works through a university holiday | Happy | P0 | Nursing School; university holiday on the date | School Incharge declares the School working, with reason | Date is a teaching day for Nursing only; declaration audited; other Schools unaffected | TTM-FR-27, §4 rule 11 |
+| TC-TTM-051 | Precedence: exception beats override beats holiday beats pattern | Boundary | P0 | All four layers set for one date | Resolve the date | The narrowest layer decides and the answer names which layer decided | §4 rule 11, TTM-FR-28 |
+| TC-TTM-052 | Compensatory Saturday follows Monday | Happy | P0 | Published timetable; School teaches Mon and Sat | Add working exception "follow Monday" on a Saturday | That date resolves as working with the Monday schedule; Saturday's own entries do not run | TTM-FR-27, §8 |
+| TC-TTM-053 | Compensatory day names a non-taught weekday | Negative | P1 | School does not teach Sunday | Add exception "follow Sunday" | Refused naming the School's working days | TTM-FR-27, §8 |
+| TC-TTM-054 | Holiday refused over captured attendance | Negative | P0 | Attendance captured for date D (via the registered checker) | System Admin declares D a holiday | Refused naming the affected sessions; nothing written; attempt audited | §4 rule 13, TTM-FR-26 |
+| TC-TTM-055 | Turning off a taught weekday refused | Negative | P0 | Published timetable teaches Saturday | School Incharge disables Saturday | Refused naming the orphaned entries; republish required first | §4 rule 13, TTM-FR-27 |
+| TC-TTM-056 | Widening the calendar always allowed | Happy | P1 | Published timetable in a live term | Enable an additional weekday | Change commits; existing entries untouched | §4 rule 13 |
+| TC-TTM-057 | Unconfigured School falls back, visibly | Boundary | P0 | School with no working pattern set | Resolve a Wednesday and a Sunday | Wednesday teaching, Sunday not (Mon–Sat default); answer flags the fallback rather than implying configuration | §8 |
+| TC-TTM-058 | Working pattern change is not retroactive | Boundary | P1 | Term half taught; attendance captured | Change the pattern mid-term | Applies from the change date forward; past sessions and attendance unchanged | §8 |
+| TC-TTM-059 | Calendar mutation denied to the wrong actor | Access | P0 | School Incharge of School A | 1. Edit university holidays 2. Edit School B's pattern | Both denied; attempts audited | §3, §4 |
+| TC-TTM-060 | Term range resolution performance | NFR | P2 | One School, 180-day term | Resolve the whole term in one call | Completes < 500 ms (p95) | §9 |
 
-Coverage addition: rebalancing triggers/ranking/empty-list (TC-021/022/023), the swap lifecycle incl. concurrency and one-hop (TC-024/025/026) map to TTM-FR-16/17; School calendar lifecycle and exam-date warnings (TC-027/028) map to TTM-FR-18; Section-instance dependency (TC-029, with TC-ONB-007/008) maps to TTM-FR-19.
+Coverage addition: rebalancing triggers/ranking/empty-list (TC-021/022/023), the swap lifecycle incl. concurrency and one-hop (TC-024/025/026) map to TTM-FR-16/17; School calendar lifecycle and exam-date warnings (TC-027/028) map to TTM-FR-18; Section-instance dependency (TC-029, with TC-ONB-007/008) maps to TTM-FR-19. **Calendar coverage (TC-045…060)** maps to TTM-FR-26/27/28 and §4 rules 11–13: weekend-teaching Schools, alternate Saturdays, campus-tagged holidays, the four-layer precedence, compensatory days, both narrowing guards, the unconfigured-School fallback, access denial, and the range-resolution NFR. Not yet covered: half-day working dates and per-date custom grids, both explicitly out of scope (§11).
 
 Coverage: every §6 acceptance criterion, the §4 authorization matrix (TC-012/015 plus scoped-authoring checks folded into TC-001), UGC traceability (TC-017), term-bound archival (TC-019/020), and all §8 decisions map to at least one test except venue-deactivation and faculty-departure conflict-queue flows, which are covered in the integration test phase.
