@@ -242,3 +242,43 @@ async def find_approval(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def published_entries_for_section(
+    session: AsyncSession, section_id: uuid.UUID, term_code: str
+) -> Sequence[tuple[TimetableEntry, Period]]:
+    """A Section's classes from the *published* timetable only.
+
+    Students and faculty never see drafts (TTM §3), so the read path filters on
+    published rather than trusting the caller to.
+    """
+    result = await session.execute(
+        select(TimetableEntry, Period)
+        .join(TimetableDraft, TimetableDraft.id == TimetableEntry.draft_id)
+        .join(Period, Period.id == TimetableEntry.period_id)
+        .where(
+            TimetableEntry.section_id == section_id,
+            TimetableDraft.term_code == term_code,
+            TimetableDraft.status == "published",
+        )
+        .order_by(TimetableEntry.day_of_week, Period.sequence)
+    )
+    return [(entry, period) for entry, period in result.all()]
+
+
+async def published_entries_for_faculty(
+    session: AsyncSession, faculty_user_id: uuid.UUID, term_code: str
+) -> Sequence[tuple[TimetableEntry, Period]]:
+    """A Faculty Member's own load, across every School they teach in."""
+    result = await session.execute(
+        select(TimetableEntry, Period)
+        .join(TimetableDraft, TimetableDraft.id == TimetableEntry.draft_id)
+        .join(Period, Period.id == TimetableEntry.period_id)
+        .where(
+            TimetableEntry.faculty_user_id == faculty_user_id,
+            TimetableDraft.term_code == term_code,
+            TimetableDraft.status == "published",
+        )
+        .order_by(TimetableEntry.day_of_week, Period.sequence)
+    )
+    return [(entry, period) for entry, period in result.all()]

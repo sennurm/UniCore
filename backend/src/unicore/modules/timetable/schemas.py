@@ -298,6 +298,26 @@ class DraftStatusOut(BaseModel):
     blocking: list[str]
 
 
+class PersonalRowOut(BaseModel):
+    day_of_week: int
+    period_name: str
+    start_time: time
+    end_time: time
+    subject_code: str
+    subject_name: str
+    elective_group: str | None
+    section_name: str
+    faculty_name: str
+    venue_code: str
+
+
+class PersonalTimetableOut(BaseModel):
+    role: str
+    section_name: str | None
+    rows: list[PersonalRowOut]
+    note: str | None
+
+
 class TimetableRowOut(BaseModel):
     entry_id: uuid.UUID
     section_id: uuid.UUID

@@ -697,6 +697,22 @@ async def positions_in_programme(
     return set(await dao.count_students_by_position(session, program_id))
 
 
+async def student_profile(
+    session: AsyncSession, user_id: uuid.UUID
+) -> StudentProfile | None:
+    """The caller's student record, or None if they are staff — TTM uses this to
+    decide whose timetable it is showing."""
+    return await dao.get_profile(session, user_id)
+
+
+async def elective_choices(
+    session: AsyncSession, user_id: uuid.UUID, term_code: str
+) -> list[StudentElectiveChoice]:
+    """A student's elective picks for a term, so TTM can drop the alternatives
+    they did not choose from their timetable."""
+    return list(await dao.elective_choices_for(session, user_id, term_code))
+
+
 async def section_headcount(
     session: AsyncSession, section_id: uuid.UUID, as_of: date | None = None
 ) -> int:

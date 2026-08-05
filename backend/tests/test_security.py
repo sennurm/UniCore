@@ -149,6 +149,7 @@ PERMISSION_EXEMPT = {
     "my_grievances",
     "my_elective_options",  # own electives, resolved from the token
     "choose_my_elective",
+    "my_timetable",  # own week, resolved from the token
 }
 
 

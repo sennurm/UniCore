@@ -8,7 +8,8 @@ year-based Schools simultaneously.
 import csv
 import io
 import uuid
-from datetime import UTC, datetime, time
+from collections.abc import Sequence
+from datetime import UTC, date, datetime, time
 from typing import cast
 
 from fastapi import HTTPException
@@ -1089,6 +1090,83 @@ async def timetable_view(
                 "subject_code": subject.code,
                 "subject_name": subject.name,
                 "faculty_user_id": entry.faculty_user_id,
+                "faculty_name": faculty.full_name,
+                "venue_code": venue.code,
+            }
+        )
+    return rows
+
+
+# --- personal views (TTM-FR-13) -----------------------------------------------
+
+
+async def my_timetable(
+    session: AsyncSession, ctx: AuthContext, term_code: str
+) -> dict[str, object]:
+    """The signed-in person's own published timetable for a term.
+
+    Own-data endpoint: the subject is resolved from the AuthContext, never from
+    a client-supplied id (project security rule), so nobody can read another
+    person's week by guessing an id.
+
+    A **student** sees their Section's classes with electives merged: an
+    elective entry appears only if they chose *that* offering, because two
+    alternatives in one group are taught in the same slot and only one of them
+    is theirs. A **Faculty Member** sees their own load across every School.
+    Drafts are never visible to either.
+    """
+    user_id = uuid.UUID(ctx.user_id)
+    profile = await onboarding_service.student_profile(session, user_id)
+
+    if profile is not None:
+        membership = await onboarding_service.membership_as_of(session, user_id, date.today())
+        if membership is None:
+            return {"role": "student", "section_name": None, "rows": [], "note":
+                    "You are not allotted to a Section for this term yet."}
+        pairs = await dao.published_entries_for_section(
+            session, membership.section_id, term_code
+        )
+        chosen = {
+            choice.offering_id
+            for choice in await onboarding_service.elective_choices(session, user_id, term_code)
+        }
+        section = await org_service.get_unit(session, membership.section_id)
+        rows = await _personal_rows(session, pairs, chosen_offerings=chosen)
+        return {"role": "student", "section_name": section.name, "rows": rows, "note": None}
+
+    pairs = await dao.published_entries_for_faculty(session, user_id, term_code)
+    rows = await _personal_rows(session, pairs, chosen_offerings=None)
+    return {"role": "faculty", "section_name": None, "rows": rows, "note": None}
+
+
+async def _personal_rows(
+    session: AsyncSession,
+    pairs: Sequence[tuple[TimetableEntry, Period]],
+    *,
+    chosen_offerings: set[uuid.UUID] | None,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for entry, period in pairs:
+        offering = await org_service.get_offering(session, entry.offering_id)
+        subject = await org_service.get_subject(session, offering.subject_id)
+        if chosen_offerings is not None and subject.kind == "elective":
+            # Two alternatives in one group run in the same slot; only the one
+            # this student picked is on their timetable.
+            if entry.offering_id not in chosen_offerings:
+                continue
+        section = await org_service.get_unit(session, entry.section_id)
+        venue = await org_service.get_venue(session, entry.venue_id)
+        faculty = await user_service.get_user(session, entry.faculty_user_id)
+        rows.append(
+            {
+                "day_of_week": entry.day_of_week,
+                "period_name": period.name,
+                "start_time": period.start_time,
+                "end_time": period.end_time,
+                "subject_code": subject.code,
+                "subject_name": subject.name,
+                "elective_group": subject.elective_group,
+                "section_name": section.name,
                 "faculty_name": faculty.full_name,
                 "venue_code": venue.code,
             }

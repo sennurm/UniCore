@@ -2,7 +2,7 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from unicore.core.db import get_session
@@ -22,6 +22,7 @@ from unicore.modules.timetable.schemas import (
     MultiSchoolTermCreate,
     PeriodGridCreate,
     PeriodGridOut,
+    PersonalTimetableOut,
     ProgrammeSectionsOut,
     SchoolTermResult,
     SectionCreate,
@@ -33,6 +34,31 @@ from unicore.modules.timetable.schemas import (
 )
 
 router = APIRouter(prefix="/timetable", tags=["timetable"])
+
+
+def _ctx(request: Request) -> AuthContext:
+    """Own-data endpoints resolve their subject from the token, never the client."""
+    ctx: AuthContext | None = getattr(request.state, "auth", None)
+    if ctx is None:  # pragma: no cover — the gate rejects earlier
+        raise HTTPException(status_code=401, detail="Unauthenticated.")
+    return ctx
+
+
+@router.get("/me", response_model=PersonalTimetableOut)
+async def my_timetable(
+    request: Request,
+    term_code: str = Query(..., min_length=1, max_length=50),
+    session: AsyncSession = Depends(get_session),
+) -> PersonalTimetableOut:
+    """Your own published timetable (TTM-FR-13).
+
+    A student sees their Section with electives merged — only the alternative
+    they chose. A Faculty Member sees their own load across every School.
+    Neither sees a draft.
+    """
+    return PersonalTimetableOut.model_validate(
+        await service.my_timetable(session, _ctx(request), term_code)
+    )
 
 
 @router.post("/terms", response_model=TermOut, status_code=201)

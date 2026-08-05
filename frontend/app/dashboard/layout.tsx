@@ -10,9 +10,10 @@ const NAV = [
   { num: "02", label: "Terms & sections", href: "/dashboard/terms" },
   { num: "03", label: "Subjects & venues", href: "/dashboard/subjects" },
   { num: "04", label: "Timetable", href: "/dashboard/timetable" },
-  { num: "05", label: "Student import", href: "/dashboard/onboarding" },
-  { num: "06", label: "Users & roles", href: "/dashboard/users" },
-  { num: "07", label: "Audit log", href: "/dashboard/audit" },
+  { num: "05", label: "My timetable", href: "/dashboard/my-timetable" },
+  { num: "06", label: "Student import", href: "/dashboard/onboarding" },
+  { num: "07", label: "Users & roles", href: "/dashboard/users" },
+  { num: "08", label: "Audit log", href: "/dashboard/audit" },
 ];
 
 type Me = { user_id: string; username: string; full_name: string; roles: string[] };

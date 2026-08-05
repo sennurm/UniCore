@@ -570,3 +570,195 @@ async def test_draft_needs_an_approved_term_and_a_grid(make_client, campus) -> N
         )
     assert unapproved.status_code == 409
     assert "approved academic term" in unapproved.json()["detail"]
+
+
+# --- personal views (TTM-FR-13) -----------------------------------------------
+
+
+async def _publish(admin: httpx.AsyncClient, campus: dict, setup: dict) -> None:
+    await admin.post(
+        f"/timetable/drafts/{setup['draft_id']}/approvals",
+        json={"department_id": campus["department"], "approve": True},
+    )
+    published = await admin.post(f"/timetable/drafts/{setup['draft_id']}/publish")
+    assert published.status_code == 200, published.text
+
+
+async def _enrol(admin: httpx.AsyncClient, n: int = 1) -> None:
+    from tests.onboarding.conftest import csv_bytes, student_row
+
+    await admin.post(
+        "/onboarding/imports",
+        data={"term_code": "2026-S1"},
+        files={"file": ("i.csv", csv_bytes([student_row(n)]), "text/csv")},
+    )
+
+
+async def test_student_sees_their_published_week(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        setup = await _setup(admin, campus)
+        await admin.post(
+            f"/timetable/drafts/{setup['draft_id']}/entries", json=_entry(setup, campus)
+        )
+        await _enrol(admin)
+        await _publish(admin, campus, setup)
+
+    async with make_client("student", user_id="r0001") as student:
+        mine = (
+            await student.get("/timetable/me", params={"term_code": "2026-S1"})
+        ).json()
+    assert mine["role"] == "student"
+    assert mine["section_name"] == "3A"
+    assert [(r["day_of_week"], r["period_name"], r["subject_code"]) for r in mine["rows"]] == [
+        (1, "P1", "MA101")
+    ]
+
+
+async def test_a_draft_is_never_visible_to_a_student(make_client, campus) -> None:
+    """Faculty and students never see drafts (TTM §3) — the read path filters on
+    published rather than trusting the caller."""
+    async with make_client("super-admin") as admin:
+        setup = await _setup(admin, campus)
+        await admin.post(
+            f"/timetable/drafts/{setup['draft_id']}/entries", json=_entry(setup, campus)
+        )
+        await _enrol(admin)
+
+    async with make_client("student", user_id="r0001") as student:
+        mine = (
+            await student.get("/timetable/me", params={"term_code": "2026-S1"})
+        ).json()
+    assert mine["rows"] == [], "an unpublished draft leaked to a student"
+
+
+async def test_student_sees_only_the_elective_they_chose(make_client, campus) -> None:
+    """Two alternatives in one group are taught in the same slot; only one is
+    theirs, so showing both would put a student in two places at once."""
+    async with make_client("super-admin") as admin:
+        setup = await _setup(admin, campus)
+        await _enrol(admin)
+
+        chosen: dict[str, str] = {}
+        for code, name in (("CS501", "Machine Learning"), ("CS502", "Distributed Systems")):
+            subject = (
+                await admin.post(
+                    "/org/subjects",
+                    json={
+                        "code": code, "name": name, "department_id": campus["department"],
+                        "kind": "elective", "elective_group": "professional", "credits": 3,
+                    },
+                )
+            ).json()
+            offering = (
+                await admin.post(
+                    "/org/offerings",
+                    json={
+                        "subject_id": subject["id"],
+                        "program_id": campus["program"],
+                        "position": 1,
+                    },
+                )
+            ).json()
+            chosen[code] = offering["id"]
+
+        # Both alternatives are timetabled — in different slots here only because
+        # one Section cannot hold two entries in the same slot.
+        for i, code in enumerate(("CS501", "CS502")):
+            teacher = (
+                await admin.post(
+                    "/user",
+                    json={"username": f"prof.e{i}", "full_name": f"Prof E{i}", "kind": "staff"},
+                )
+            ).json()
+            venue = (
+                await admin.post(
+                    "/org/venues",
+                    json={"code": f"E{i}", "name": f"Room E{i}", "capacity": 60},
+                )
+            ).json()
+            await admin.post(
+                f"/timetable/drafts/{setup['draft_id']}/entries",
+                json=_entry(
+                    setup,
+                    campus,
+                    period_id=setup["periods"]["P2" if i == 0 else "P3"],
+                    offering_id=chosen[code],
+                    faculty_user_id=teacher["id"],
+                    venue_id=venue["id"],
+                ),
+            )
+        await _publish(admin, campus, setup)
+
+    async with make_client("student", user_id="r0001") as student:
+        before = (await student.get("/timetable/me", params={"term_code": "2026-S1"})).json()
+        await student.post(
+            "/onboarding/me/electives",
+            json={"offering_id": chosen["CS501"], "term_code": "2026-S1"},
+        )
+        after = (await student.get("/timetable/me", params={"term_code": "2026-S1"})).json()
+
+    assert [r["subject_code"] for r in before["rows"]] == [], (
+        "electives appeared before the student chose one"
+    )
+    assert [r["subject_code"] for r in after["rows"]] == ["CS501"]
+
+
+async def test_faculty_sees_their_own_load(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        setup = await _setup(admin, campus)
+        await admin.post(
+            f"/timetable/drafts/{setup['draft_id']}/entries", json=_entry(setup, campus)
+        )
+        await _publish(admin, campus, setup)
+
+    async with make_client("professor", user_id="prof.a") as teacher:
+        mine = (await teacher.get("/timetable/me", params={"term_code": "2026-S1"})).json()
+    assert mine["role"] == "faculty"
+    assert [(r["subject_code"], r["section_name"], r["venue_code"]) for r in mine["rows"]] == [
+        ("MA101", "3A", "A101")
+    ]
+
+
+async def test_faculty_does_not_see_another_teachers_classes(make_client, campus) -> None:
+    async with make_client("super-admin") as admin:
+        setup = await _setup(admin, campus)
+        await admin.post(
+            f"/timetable/drafts/{setup['draft_id']}/entries", json=_entry(setup, campus)
+        )
+        await admin.post(
+            "/user", json={"username": "prof.z", "full_name": "Prof Z", "kind": "staff"}
+        )
+        await _publish(admin, campus, setup)
+
+    async with make_client("professor", user_id="prof.z") as other:
+        mine = (await other.get("/timetable/me", params={"term_code": "2026-S1"})).json()
+    assert mine["rows"] == [], "a teacher saw a class they do not teach"
+
+
+async def test_student_without_a_section_is_told_why_rather_than_shown_nothing(
+    make_client, campus
+) -> None:
+    """An empty week with no explanation looks like a broken page. A student who
+    holds a profile but no current Section gets the reason."""
+    async with make_client("super-admin") as admin:
+        setup = await _setup(admin, campus)
+        await admin.post(
+            f"/timetable/drafts/{setup['draft_id']}/entries", json=_entry(setup, campus)
+        )
+        await _enrol(admin)
+        await _publish(admin, campus, setup)
+
+        roster = (await admin.get(f"/onboarding/sections/{campus['section_3a']}/roster")).json()
+        # Withdrawal closes the Section membership but keeps the student record,
+        # which is exactly the "profile without a Section" shape.
+        form = {"reason": "left the programme", "effective_from": "2026-08-01"}
+        withdrawn = await admin.post(
+            f"/onboarding/students/{roster[0]['user_id']}/withdraw", data=form
+        )
+        assert withdrawn.status_code == 202, withdrawn.text
+
+    async with make_client("student", user_id="r0001") as student:
+        mine = (await student.get("/timetable/me", params={"term_code": "2026-S1"})).json()
+    assert mine["role"] == "student"
+    assert mine["rows"] == []
+    assert mine["note"] and "not allotted" in mine["note"]
