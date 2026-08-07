@@ -3,7 +3,7 @@
 Maps TTM-FR-26/27/28 and §4 rules 11–13 (TC-TTM-045…060).
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import date
 
 import httpx
@@ -17,6 +17,10 @@ TERM = "2026-S1"
 # the 1st Saturday and the 21st is the 3rd, which is what the nth-weekday rules
 # below are asserting against.
 SAT_1ST, SAT_2ND, SAT_3RD, SAT_4TH = "2026-11-07", "2026-11-14", "2026-11-21", "2026-11-28"
+
+# January 2026 has five Saturdays — 3, 10, 17, 24, 31 — which is the boundary
+# "1st and 3rd" is specified against.
+JAN_SATURDAYS = ["2026-01-03", "2026-01-10", "2026-01-17", "2026-01-24", "2026-01-31"]
 
 ALL_SEVEN = {str(n): True for n in range(1, 8)}
 MON_TO_FRI = {str(n): True for n in range(1, 6)}
@@ -85,6 +89,24 @@ async def test_alternate_saturdays_resolve_by_occurrence(make_client, campus) ->
             for d in (SAT_1ST, SAT_2ND, SAT_3RD, SAT_4TH)
         }
     assert saturdays == {SAT_1ST: True, SAT_2ND: False, SAT_3RD: True, SAT_4TH: False}
+
+
+async def test_a_fifth_saturday_is_not_among_the_first_and_third(make_client, campus) -> None:
+    """§8 boundary. Occurrences are counted within the calendar month, so a
+    month with five Saturdays simply has two extra non-teaching ones — an ISO
+    week-number reading would drift and start teaching them."""
+    async with make_client("super-admin") as admin:
+        await _pattern(admin, campus["school"], ALTERNATE_SATURDAYS)
+        teaching = {
+            d: (await _day(admin, campus["school"], d))["teaching"] for d in JAN_SATURDAYS
+        }
+    assert teaching == {
+        "2026-01-03": True,   # 1st
+        "2026-01-10": False,  # 2nd
+        "2026-01-17": True,   # 3rd
+        "2026-01-24": False,  # 4th
+        "2026-01-31": False,  # 5th — not among "1st and 3rd"
+    }
 
 
 async def test_a_school_with_no_teaching_day_is_refused(make_client, campus) -> None:
@@ -186,6 +208,80 @@ async def test_withdrawing_a_holiday_reopens_the_day(make_client, campus) -> Non
     assert closed["teaching"] is False and reopened["teaching"] is True
     # Kept, not deleted — a date that used to be closed is what audits ask about.
     assert [h["status"] for h in listed] == ["withdrawn"]
+
+
+async def test_overlapping_holidays_are_allowed_and_the_narrower_one_decides(
+    make_client, campus
+) -> None:
+    """§8. A public holiday inside a vacation block is normal, not a conflict —
+    and the narrower entry is the more specific answer, so it is the one named."""
+    async with make_client("super-admin") as admin:
+        await admin.post(
+            "/timetable/holidays",
+            json={
+                "from_date": "2026-11-09", "to_date": "2026-11-22",
+                "label": "Semester break", "kind": "vacation",
+            },
+        )
+        await admin.post(
+            "/timetable/holidays",
+            json={
+                "from_date": "2026-11-11", "to_date": "2026-11-11",
+                "label": "Republic Day", "kind": "public",
+            },
+        )
+        inside = await _day(admin, campus["school"], "2026-11-11")
+        elsewhere = await _day(admin, campus["school"], "2026-11-12")
+
+    assert inside["teaching"] is False and elsewhere["teaching"] is False
+    assert "Republic Day" in inside["detail"], "the block was named over the specific day"
+    assert "Semester break" in elsewhere["detail"]
+
+
+async def test_a_school_may_work_part_of_a_vacation_block(make_client, campus) -> None:
+    """§8. A Nursing School running ward postings through the first week of a
+    break declares that week — not the whole block."""
+    async with make_client("super-admin") as admin:
+        await _pattern(admin, campus["school"], ALL_SEVEN)
+        await admin.post(
+            "/timetable/holidays",
+            json={
+                "from_date": "2026-11-09", "to_date": "2026-11-22",
+                "label": "Semester break", "kind": "vacation",
+            },
+        )
+        for day in ("2026-11-09", "2026-11-10"):
+            declared = await admin.post(
+                f"/timetable/schools/{campus['school']}/exceptions",
+                json={"on_date": day, "working": True, "reason": "Ward postings continue"},
+            )
+            assert declared.status_code == 201, declared.text
+        days = await _resolve(admin, campus["school"], "2026-11-09", "2026-11-22")
+
+    teaching = [d["on_date"] for d in days if d["teaching"]]
+    assert teaching == ["2026-11-09", "2026-11-10"]
+    assert all(d["decided_by"] == "school-override" for d in days if d["teaching"])
+
+
+async def test_a_holiday_on_a_day_the_school_never_teaches_is_a_no_op(
+    make_client, campus
+) -> None:
+    """§8. The date is already non-working, so the holiday changes nothing and
+    the School needs no exception to say so."""
+    async with make_client("super-admin") as admin:
+        await _pattern(admin, campus["school"], MON_TO_FRI)
+        before = await _day(admin, campus["school"], "2026-11-08")  # a Sunday
+        created = await admin.post(
+            "/timetable/holidays",
+            json={
+                "from_date": "2026-11-08", "to_date": "2026-11-08",
+                "label": "Founder's Day", "kind": "public",
+            },
+        )
+        after = await _day(admin, campus["school"], "2026-11-08")
+
+    assert created.status_code == 201, created.text
+    assert before["teaching"] is False and after["teaching"] is False
 
 
 # --- precedence (§4 rule 11) --------------------------------------------------
@@ -318,15 +414,21 @@ async def test_a_non_working_date_cannot_follow_a_weekday(make_client, campus) -
 
 
 @pytest.fixture
-def captured_attendance(monkeypatch: pytest.MonkeyPatch) -> None:
+def captured_attendance(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, bool]]:
     """Stand in for ATT, which does not exist yet. The guard is enforced through
     a registered probe, so it is live and testable now and correct the day ATT
-    lands — the same wiring org already uses for ONB's position reader."""
+    lands — the same wiring org already uses for ONB's position reader.
+
+    Yields a switch, because a test that needs attendance to appear *after* some
+    setup would otherwise be blocked from doing the setup at all.
+    """
+    state = {"captured": True}
 
     async def probe(session, school_id, start, end) -> list[str]:
-        return ["11-11-2026 P1 MA101 · 1A"]
+        return ["11-11-2026 P1 MA101 · 1A"] if state["captured"] else []
 
     monkeypatch.setattr(ttm_service, "_attendance_probe", probe)
+    yield state
 
 
 async def test_a_holiday_is_refused_over_captured_attendance(
@@ -360,6 +462,67 @@ async def test_closing_a_date_is_refused_over_captured_attendance(
         )
     assert refused.status_code == 409
     assert "attendance has already been captured" in refused.json()["detail"]
+
+
+async def test_widening_a_holiday_to_more_campuses_is_guarded(
+    make_client, campus, captured_attendance
+) -> None:
+    """Regression. The guard used to watch only the dates, so dropping a campus
+    tag turned a one-campus holiday university-wide and closed dates that other
+    Schools had already taught and marked — silently, with a 200."""
+    async with make_client("super-admin") as admin:
+        captured_attendance["captured"] = False  # nothing marked yet
+        holiday = (
+            await admin.post(
+                "/timetable/holidays",
+                json={
+                    "from_date": "2026-11-11", "to_date": "2026-11-11",
+                    "label": "Local festival", "kind": "local",
+                    "campus_codes": ["CHENNAI"],
+                },
+            )
+        ).json()
+        # Schools on the other campuses taught that date and marked attendance.
+        captured_attendance["captured"] = True
+
+        # Same dates, but now every campus: newly closed for everyone else.
+        widened = await admin.put(
+            f"/timetable/holidays/{holiday['id']}", json={"campus_codes": []}
+        )
+        added = await admin.put(
+            f"/timetable/holidays/{holiday['id']}",
+            json={"campus_codes": ["CHENNAI", "COIMBATORE"]},
+        )
+        # Narrowing the campus list re-opens dates, so it stays allowed.
+        narrowed = await admin.put(
+            f"/timetable/holidays/{holiday['id']}", json={"campus_codes": ["CHENNAI"]}
+        )
+        after = (await admin.get("/timetable/holidays")).json()[0]
+
+    assert widened.status_code == 409, widened.text
+    assert "more campuses" in widened.json()["detail"]
+    assert added.status_code == 409, added.text
+    assert narrowed.status_code == 200, narrowed.text
+    assert after["campus_codes"] == ["CHENNAI"], "a refused widen still wrote"
+
+
+async def test_a_pattern_change_is_not_retroactive_for_history(
+    make_client, campus
+) -> None:
+    """TC-TTM-058. The resolver is a pure function of current configuration, so
+    a past date does re-answer under a new pattern — that is correct, because
+    what protects history is not the resolver. ATT materialises dated Sessions
+    when they happen, and the §4 rule 13 guards stop a taught day being
+    withdrawn underneath them. This test pins the resolver's statelessness so a
+    future change to it is a deliberate one."""
+    async with make_client("super-admin") as admin:
+        await _pattern(admin, campus["school"], ALL_SEVEN)
+        taught = await _day(admin, campus["school"], "2026-01-04")  # a Sunday, past
+        await _pattern(admin, campus["school"], MON_TO_FRI)
+        reanswered = await _day(admin, campus["school"], "2026-01-04")
+
+    assert taught["teaching"] is True
+    assert reanswered["teaching"] is False
 
 
 async def test_declaring_a_working_day_is_never_blocked_by_attendance(

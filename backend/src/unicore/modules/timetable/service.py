@@ -1,8 +1,10 @@
 """Business rules for the timetable module. The only layer other modules may call.
 
-Milestone-2 slice: per-School academic terms (TTM-FR-18) and per-term Section
-instances (TTM-FR-19). Term dates are per School — one campus hosts semester- and
-year-based Schools simultaneously.
+Everything here is per School rather than per campus, because one campus hosts
+semester- and year-based Schools simultaneously and a Nursing School teaching
+weekends beside a Mon–Sat Engineering School: term dates (TTM-FR-18), Section
+instances (TTM-FR-19), period grids, draft authoring with clash detection, and
+the working-day calendar whose resolver ATT, LVE and TSK all read (TTM-FR-28).
 """
 
 import csv
@@ -1347,9 +1349,11 @@ async def resolve_days(
     resolved: list[dict[str, object]] = []
     cursor = start
     while cursor <= end:
-        holiday = next(
-            (h for h in holidays if h.from_date <= cursor <= h.to_date), None
-        )
+        # Overlaps are legitimate — a public holiday inside a vacation block —
+        # and the narrower entry is the more specific answer, so it is the one
+        # named. Ordering by start date would name the block instead.
+        covering = [h for h in holidays if h.from_date <= cursor <= h.to_date]
+        holiday = min(covering, key=lambda h: (h.to_date - h.from_date).days) if covering else None
         exception = exceptions.get(cursor)
         if exception is not None and not exception.working:
             resolved.append({
@@ -1426,6 +1430,14 @@ async def create_holiday(
         after=_holiday_snapshot(holiday),
     )
     await session.commit()
+    get_logger().info(
+        "university holiday declared",
+        label=holiday.label,
+        kind=holiday.kind,
+        from_date=holiday.from_date.isoformat(),
+        to_date=holiday.to_date.isoformat(),
+        campuses=len(holiday.campus_codes) or "all",
+    )
     return holiday
 
 
@@ -1440,6 +1452,21 @@ def _holiday_snapshot(holiday: UniversityHoliday) -> dict[str, object]:
     }
 
 
+def _widens_campuses(old: list[str], new: list[str]) -> bool:
+    """Does re-tagging close the date for campuses that were open?
+
+    An untagged entry already covers everyone, so nothing it becomes can newly
+    close anything. A tagged one that loses its tags becomes university-wide,
+    and one that gains a campus newly closes that campus — both narrow the
+    calendar for Schools that were teaching, which is what rule 13 guards.
+    """
+    if not old:
+        return False
+    if not new:
+        return True
+    return bool(set(new) - set(old))
+
+
 async def update_holiday(
     session: AsyncSession, ctx: AuthContext, holiday_id: uuid.UUID, data: HolidayUpdate
 ) -> UniversityHoliday:
@@ -1451,16 +1478,31 @@ async def update_holiday(
     new_to = data.to_date or holiday.to_date
     if new_to < new_from:
         raise HTTPException(status_code=422, detail="to_date cannot be before from_date.")
-    # Only dates the entry does not already cover are newly closed; re-checking
-    # the dates it already covered would refuse a pure relabel.
-    if new_from < holiday.from_date:
+    new_codes = holiday.campus_codes if data.campus_codes is None else data.campus_codes
+    if _widens_campuses(list(holiday.campus_codes), list(new_codes)):
+        # Campuses that were open are now closed for the *whole* range, not just
+        # for dates being added — so the guard spans old and new together. It
+        # asks about every School rather than only the newly-covered campuses,
+        # because refusing too widely is the safe direction for a rule that
+        # exists to stop attendance being erased.
         await _refuse_if_attendance_captured(
-            session, None, new_from, holiday.from_date, "extend that holiday"
+            session,
+            None,
+            min(new_from, holiday.from_date),
+            max(new_to, holiday.to_date),
+            f"widen '{holiday.label}' to more campuses",
         )
-    if new_to > holiday.to_date:
-        await _refuse_if_attendance_captured(
-            session, None, holiday.to_date, new_to, "extend that holiday"
-        )
+    else:
+        # Only dates the entry does not already cover are newly closed;
+        # re-checking the dates it already covered would refuse a pure relabel.
+        if new_from < holiday.from_date:
+            await _refuse_if_attendance_captured(
+                session, None, new_from, holiday.from_date, "extend that holiday"
+            )
+        if new_to > holiday.to_date:
+            await _refuse_if_attendance_captured(
+                session, None, holiday.to_date, new_to, "extend that holiday"
+            )
     holiday.from_date, holiday.to_date = new_from, new_to
     if data.label is not None:
         holiday.label = data.label
@@ -1578,6 +1620,12 @@ async def set_working_pattern(
         after={"days": dict(data.days), "term_code": data.term_code},
     )
     await session.commit()
+    get_logger().info(
+        "school working days set",
+        school_id=str(school_id),
+        term_code=data.term_code,
+        days=sorted(data.days),
+    )
     return row
 
 

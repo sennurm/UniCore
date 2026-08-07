@@ -74,6 +74,11 @@ export default function CalendarPage() {
 
   const [pattern, setPattern] = useState<Pattern | null>(null);
   const [draftDays, setDraftDays] = useState<Record<string, boolean | number[]>>({});
+  /** The occurrence boxes are controlled off their own text state. An
+   *  uncontrolled input keyed only by weekday keeps the previous School's text
+   *  when you switch Schools — and blurring it would then write that School's
+   *  rule onto this one. */
+  const [occText, setOccText] = useState<Record<string, string>>({});
 
   const [exceptions, setExceptions] = useState<Exception[]>([]);
   const [exceptionForm, setExceptionForm] = useState(BLANK_EXCEPTION);
@@ -129,6 +134,14 @@ export default function CalendarPage() {
     ]);
     setPattern(p);
     setDraftDays(p.days);
+    setOccText(
+      Object.fromEntries(
+        Object.entries(p.days).map(([day, rule]) => [
+          day,
+          Array.isArray(rule) ? rule.join(", ") : "",
+        ]),
+      ),
+    );
     setExceptions(e);
     setResolved(r);
   }, [schoolId, month]);
@@ -238,22 +251,26 @@ export default function CalendarPage() {
 
   function toggleDay(n: number) {
     const key = String(n);
-    const current = draftDays[key];
     setDraftDays((days) => {
       const next = { ...days };
+      const current = days[key];
       if (current === true || Array.isArray(current)) delete next[key];
       else next[key] = true;
       return next;
     });
+    setOccText((text) => ({ ...text, [key]: "" }));
   }
 
-  function setOccurrences(n: number, value: string) {
+  /** Parsed on blur rather than on every keystroke, so typing "1, 3" is not
+   *  fought halfway through. Unparseable text means "every occurrence". */
+  function commitOccurrences(n: number) {
     const key = String(n);
-    const list = value
+    const list = (occText[key] ?? "")
       .split(",")
       .map((v) => Number(v.trim()))
       .filter((v) => v >= 1 && v <= 5);
     setDraftDays((days) => ({ ...days, [key]: list.length ? list : true }));
+    setOccText((text) => ({ ...text, [key]: list.join(", ") }));
   }
 
   // ── render ────────────────────────────────────────────────────────────────
@@ -447,9 +464,12 @@ export default function CalendarPage() {
                             <input
                               className="input"
                               style={{ maxWidth: 220, padding: "2px 6px" }}
-                              defaultValue={Array.isArray(value) ? value.join(", ") : ""}
+                              value={occText[String(n)] ?? ""}
                               placeholder="every one — or 1, 3 for alternate"
-                              onBlur={(e) => setOccurrences(n, e.target.value)}
+                              onChange={(e) =>
+                                setOccText({ ...occText, [String(n)]: e.target.value })
+                              }
+                              onBlur={() => commitOccurrences(n)}
                             />
                           ) : (
                             <span className="card-meta">not taught</span>

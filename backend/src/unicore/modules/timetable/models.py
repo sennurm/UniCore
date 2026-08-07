@@ -1,7 +1,9 @@
 """ORM tables owned by the timetable module (aggregated into core.db.Base.metadata).
 
-Milestone-2 slice only: the per-School academic term (TTM-FR-18). Period grids,
-drafts, and published timetables arrive with the full TTM milestone.
+Four groups: the per-School academic term (TTM-FR-18); period grids and their
+Periods (TTM-FR-02); drafts, entries and HoD approvals (TTM-FR-03/04/08/09); and
+the calendar — university holidays layered under each School's working-day
+pattern and its dated exceptions (TTM-FR-26/27).
 """
 
 import uuid
